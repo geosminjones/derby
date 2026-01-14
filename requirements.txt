@@ -1,0 +1,12 @@
+# requirements.txt - Python package dependencies
+# Install with: pip install -r requirements.txt
+
+# Typer: CLI framework that uses type hints for argument parsing
+# The [all] extra includes Rich for pretty terminal output
+typer[all]>=0.9.0
+
+# Note: sqlite3 is part of Python's standard library, no install needed
+# Note: dataclasses are built-in for Python 3.7+
+
+# Optional but recommended for development:
+# pyinstaller>=6.0    # For building standalone executables

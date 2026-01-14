@@ -1,0 +1,882 @@
+================================================================================
+TIMETRACK CLI - COMPLETE DOCUMENTATION
+================================================================================
+
+Generated: January 2025
+Version: 1.0.0
+Author: Claude (Anthropic) with user direction
+Python Version: 3.10+
+Platform: Cross-platform (Windows, macOS, Linux)
+
+This document serves two purposes:
+  1. USER GUIDE: Complete command reference and usage instructions
+  2. DEVELOPER GUIDE: Architecture documentation for future development
+
+================================================================================
+PART I: USER GUIDE
+================================================================================
+
+--------------------------------------------------------------------------------
+SECTION 1: INSTALLATION
+--------------------------------------------------------------------------------
+
+DEPENDENCIES:
+    - Python 3.10 or higher
+    - typer[all] >= 0.9.0 (includes Rich for terminal formatting)
+
+INSTALL STEPS:
+    1. Place all .py files in a single directory
+    2. Run: pip install -r requirements.txt
+    3. Test: python cli.py --help
+
+BUILDING STANDALONE EXECUTABLE:
+    1. pip install pyinstaller
+    2. python -m PyInstaller --onefile --name tt cli.py
+    3. Executable created at: dist/tt.exe (Windows) or dist/tt (Unix)
+
+DATA STORAGE LOCATION:
+    Windows:  C:\Users\<username>\.timetrack\timetrack.db
+    macOS:    /Users/<username>/.timetrack/timetrack.db
+    Linux:    /home/<username>/.timetrack/timetrack.db
+
+--------------------------------------------------------------------------------
+SECTION 2: COMMAND REFERENCE
+--------------------------------------------------------------------------------
+
+General syntax:
+    python cli.py <COMMAND> [ARGUMENTS] [OPTIONS]
+    
+    Or if using compiled executable:
+    tt <COMMAND> [ARGUMENTS] [OPTIONS]
+
+Getting help:
+    python cli.py --help              Show all commands
+    python cli.py <COMMAND> --help    Show help for specific command
+
+--------------------------------------------------------------------------------
+
+COMMAND: start
+--------------------------------------------------------------------------------
+PURPOSE:
+    Begin tracking time for a project. Creates the project if it doesn't exist.
+
+SYNTAX:
+    tt start <PROJECT_NAME>
+
+ARGUMENTS:
+    PROJECT_NAME    (required)    Name of the project to track
+                                  Use quotes if name contains spaces
+
+OPTIONS:
+    None
+
+BEHAVIOR:
+    - If no active session exists: starts a new session, records current time
+    - If a session is already active: prints warning, exits with error code 1
+    - If project doesn't exist: creates it automatically
+
+EXAMPLES:
+    tt start Coding
+    tt start "Job Search"
+    tt start "Project Alpha - Phase 2"
+
+EXIT CODES:
+    0    Success
+    1    Session already active
+
+--------------------------------------------------------------------------------
+
+COMMAND: stop
+--------------------------------------------------------------------------------
+PURPOSE:
+    End the currently active tracking session.
+
+SYNTAX:
+    tt stop [OPTIONS]
+
+ARGUMENTS:
+    None
+
+OPTIONS:
+    --notes, -n TEXT    Optional description of what you worked on
+                        String value, use quotes for multi-word notes
+
+BEHAVIOR:
+    - If active session exists: records end time, calculates duration, prints summary
+    - If no active session: prints warning, exits with error code 1
+    - Notes are stored in the database alongside the session
+
+EXAMPLES:
+    tt stop
+    tt stop --notes "Finished chapter 3"
+    tt stop -n "Applied to 5 positions"
+
+EXIT CODES:
+    0    Success
+    1    No active session to stop
+
+--------------------------------------------------------------------------------
+
+COMMAND: switch
+--------------------------------------------------------------------------------
+PURPOSE:
+    Stop current session and immediately start a new one for a different project.
+    Convenience command equivalent to running stop then start.
+
+SYNTAX:
+    tt switch <PROJECT_NAME>
+
+ARGUMENTS:
+    PROJECT_NAME    (required)    Name of the project to switch to
+
+OPTIONS:
+    None
+
+BEHAVIOR:
+    - If active session exists: stops it (without notes), starts new session
+    - If no active session: simply starts the new session
+    - Creates project if it doesn't exist
+
+EXAMPLES:
+    tt switch Reading
+    tt switch "Side Project"
+
+EXIT CODES:
+    0    Success
+
+--------------------------------------------------------------------------------
+
+COMMAND: status
+--------------------------------------------------------------------------------
+PURPOSE:
+    Display the current tracking state.
+
+SYNTAX:
+    tt status
+
+ARGUMENTS:
+    None
+
+OPTIONS:
+    None
+
+BEHAVIOR:
+    - If session active: shows project name, start time, elapsed duration
+    - If idle: indicates no active session
+
+OUTPUT FORMAT:
+    Active session displays in a bordered panel with:
+      - Project name (bold)
+      - Start timestamp (12-hour format with AM/PM)
+      - Running duration (updates each time you run status)
+
+EXAMPLES:
+    tt status
+
+EXIT CODES:
+    0    Always (informational command)
+
+--------------------------------------------------------------------------------
+
+COMMAND: log
+--------------------------------------------------------------------------------
+PURPOSE:
+    Add a completed session retroactively. Use when you forgot to start the
+    timer but want to record time spent.
+
+SYNTAX:
+    tt log <PROJECT_NAME> <DURATION> [OPTIONS]
+
+ARGUMENTS:
+    PROJECT_NAME    (required)    Project to attribute time to
+    DURATION        (required)    How long you worked (see format below)
+
+OPTIONS:
+    --notes, -n TEXT      Description of what you worked on
+    --date, -d TEXT       Date for the session in YYYY-MM-DD format
+                          Defaults to today if not specified
+
+DURATION FORMATS:
+    1h30m       1 hour and 30 minutes
+    2h          2 hours
+    45m         45 minutes
+    1h 30m      1 hour and 30 minutes (space allowed)
+    90          90 minutes (bare number interpreted as minutes)
+
+BEHAVIOR:
+    - Creates a completed session (both start and end time set)
+    - End time is set to 5:00 PM on the specified date (or now if no date)
+    - Start time is calculated by subtracting duration from end time
+    - Creates project if it doesn't exist
+
+EXAMPLES:
+    tt log Exercise 45m
+    tt log "Job Search" 1h30m --notes "Updated resume"
+    tt log Reading 2h --date 2024-01-15
+    tt log Coding 90 -n "Bug fixes" -d 2024-01-10
+
+EXIT CODES:
+    0    Success
+    1    Invalid duration or date format
+
+--------------------------------------------------------------------------------
+
+COMMAND: list
+--------------------------------------------------------------------------------
+PURPOSE:
+    Display recent completed sessions in a table.
+
+SYNTAX:
+    tt list [OPTIONS]
+
+ARGUMENTS:
+    None
+
+OPTIONS:
+    --project, -p TEXT    Filter to show only sessions for this project
+    --limit, -l INTEGER   Maximum number of sessions to display
+                          Default: 10
+
+BEHAVIOR:
+    - Shows completed sessions only (excludes active session)
+    - Sorted by start time, newest first
+    - Truncates long notes to 30 characters
+
+OUTPUT COLUMNS:
+    Date        Session start time (YYYY-MM-DD HH:MM)
+    Project     Project name
+    Duration    Time spent (Xh XXm XXs format)
+    Notes       Session notes (truncated)
+
+EXAMPLES:
+    tt list
+    tt list --limit 20
+    tt list --project "Job Search"
+    tt list -p Coding -l 50
+
+EXIT CODES:
+    0    Always
+
+--------------------------------------------------------------------------------
+
+COMMAND: summary
+--------------------------------------------------------------------------------
+PURPOSE:
+    Show aggregated time totals grouped by project.
+
+SYNTAX:
+    tt summary [OPTIONS]
+
+ARGUMENTS:
+    None
+
+OPTIONS:
+    --period, -p TEXT    Time period to summarize
+                         Values: today, week, all
+                         Default: today
+
+PERIOD DEFINITIONS:
+    today    From midnight today to now
+    week     From Monday 00:00 of current week to Sunday 23:59
+    all      All recorded sessions, no date filter
+
+OUTPUT COLUMNS:
+    Project     Project name
+    Time        Human-readable duration (e.g., "2h 30m")
+    Hours       Decimal hours (e.g., "2.50")
+
+    Final row shows TOTAL across all projects.
+
+EXAMPLES:
+    tt summary
+    tt summary --period week
+    tt summary -p all
+
+EXIT CODES:
+    0    Always
+
+--------------------------------------------------------------------------------
+
+COMMAND: projects
+--------------------------------------------------------------------------------
+PURPOSE:
+    List all project names that have been created.
+
+SYNTAX:
+    tt projects
+
+ARGUMENTS:
+    None
+
+OPTIONS:
+    None
+
+BEHAVIOR:
+    - Lists all projects alphabetically (case-insensitive sort)
+    - Shows project names only, no statistics
+
+EXAMPLES:
+    tt projects
+
+EXIT CODES:
+    0    Always
+
+--------------------------------------------------------------------------------
+
+COMMAND: export
+--------------------------------------------------------------------------------
+PURPOSE:
+    Export all completed sessions to a CSV file for use in spreadsheet software.
+
+SYNTAX:
+    tt export [OPTIONS]
+
+ARGUMENTS:
+    None
+
+OPTIONS:
+    --output, -o TEXT    Output file path
+                         Default: timetrack_export.csv (in current directory)
+
+OUTPUT FORMAT:
+    CSV file with columns:
+      - Project: Project name
+      - Start Time: ISO timestamp
+      - End Time: ISO timestamp
+      - Duration (seconds): Integer
+      - Duration (hours): Decimal, 2 places
+      - Notes: Session notes
+
+BEHAVIOR:
+    - Exports ALL completed sessions (no date filter)
+    - Sorted by start time, oldest first
+    - Creates file at specified path, overwrites if exists
+
+EXAMPLES:
+    tt export
+    tt export --output "C:\Users\me\Documents\time_data.csv"
+    tt export -o backup.csv
+
+EXIT CODES:
+    0    Success
+
+--------------------------------------------------------------------------------
+
+COMMAND: cancel
+--------------------------------------------------------------------------------
+PURPOSE:
+    Discard the active session without saving. Use when you started tracking
+    by mistake.
+
+SYNTAX:
+    tt cancel
+
+ARGUMENTS:
+    None
+
+OPTIONS:
+    None
+
+BEHAVIOR:
+    - Prompts for confirmation before deleting (y/n)
+    - If confirmed: deletes the active session from database
+    - If declined: no action taken
+    - If no active session: prints warning
+
+EXAMPLES:
+    tt cancel
+
+EXIT CODES:
+    0    Success or user cancelled
+    1    No active session
+
+--------------------------------------------------------------------------------
+
+COMMAND: delete
+--------------------------------------------------------------------------------
+PURPOSE:
+    Delete a specific completed session by its database ID.
+
+SYNTAX:
+    tt delete <SESSION_ID>
+
+ARGUMENTS:
+    SESSION_ID    (required)    Integer ID of the session to delete
+
+OPTIONS:
+    None
+
+BEHAVIOR:
+    - Displays session details and prompts for confirmation
+    - If confirmed: permanently removes session from database
+    - If declined: no action taken
+
+NOTE:
+    Session IDs are internal database identifiers. Currently, the list
+    command does not display IDs. To find an ID, you can query the database
+    directly or add ID display to the list command (see developer section).
+
+EXAMPLES:
+    tt delete 42
+    tt delete 1
+
+EXIT CODES:
+    0    Success or user cancelled
+    1    Session ID not found
+
+
+================================================================================
+PART II: DEVELOPER DOCUMENTATION
+================================================================================
+
+--------------------------------------------------------------------------------
+SECTION 1: PROJECT ARCHITECTURE
+--------------------------------------------------------------------------------
+
+FILE STRUCTURE:
+    timetrack/
+    ├── cli.py              Command-line interface (entry point)
+    ├── db.py               Database operations layer
+    ├── models.py           Data structures and utilities
+    ├── requirements.txt    Python dependencies
+    ├── README.md           Quick-start guide
+    ├── documentation.txt   This file
+    └── timetrack.db        SQLite database (created at runtime, in ~/.timetrack/)
+
+DEPENDENCY GRAPH:
+    cli.py
+      ├── imports db.py
+      ├── imports models.py (Session, parse_duration_string)
+      ├── imports typer
+      └── imports rich (Console, Table, Panel)
+    
+    db.py
+      ├── imports models.py (Project, Session)
+      └── imports sqlite3, datetime, pathlib, typing
+    
+    models.py
+      └── imports dataclasses, datetime, typing, re
+
+DESIGN PRINCIPLES:
+    1. Separation of Concerns
+       - models.py: Pure data structures, no I/O
+       - db.py: All database operations, no CLI knowledge
+       - cli.py: User interface only, delegates to db.py
+    
+    2. Single Source of Truth
+       - Active session defined by: end_time IS NULL
+       - No redundant "is_active" flags
+    
+    3. Timestamps as ISO Strings
+       - SQLite lacks native datetime type
+       - ISO format (YYYY-MM-DDTHH:MM:SS) sorts lexicographically
+       - Parsed to Python datetime objects at query time
+    
+    4. Duration via timedelta
+       - Never store durations as ambiguous integers
+       - All duration math uses datetime.timedelta
+
+--------------------------------------------------------------------------------
+SECTION 2: DATABASE SCHEMA
+--------------------------------------------------------------------------------
+
+DATABASE LOCATION:
+    Determined by DATA_DIR in db.py:
+        DATA_DIR = Path.home() / ".timetrack"
+        DATABASE_PATH = DATA_DIR / "timetrack.db"
+
+TABLES:
+
+    projects
+    +-----------+---------+------------------------------------------+
+    | Column    | Type    | Constraints                              |
+    +-----------+---------+------------------------------------------+
+    | id        | INTEGER | PRIMARY KEY AUTOINCREMENT                |
+    | name      | TEXT    | NOT NULL UNIQUE                          |
+    | created_at| TEXT    | NOT NULL DEFAULT CURRENT_TIMESTAMP       |
+    +-----------+---------+------------------------------------------+
+
+    sessions
+    +-------------+---------+------------------------------------------+
+    | Column      | Type    | Constraints                              |
+    +-------------+---------+------------------------------------------+
+    | id          | INTEGER | PRIMARY KEY AUTOINCREMENT                |
+    | project_name| TEXT    | NOT NULL                                 |
+    | start_time  | TEXT    | NOT NULL                                 |
+    | end_time    | TEXT    | (nullable - NULL means active)           |
+    | notes       | TEXT    | DEFAULT ''                               |
+    +-------------+---------+------------------------------------------+
+
+INDEXES:
+    idx_sessions_project     ON sessions(project_name)
+    idx_sessions_start_time  ON sessions(start_time)
+
+NOTES:
+    - No foreign key constraint between sessions.project_name and projects.name
+    - This is intentional for simplicity; projects are auto-created on first use
+    - Times stored as ISO 8601 strings: "2024-01-15T14:30:00.123456"
+
+--------------------------------------------------------------------------------
+SECTION 3: MODULE DOCUMENTATION
+--------------------------------------------------------------------------------
+
+=== models.py ===
+
+CLASSES:
+
+    @dataclass Project
+        Fields:
+            id: Optional[int]           Database primary key (None until saved)
+            name: str                   Human-readable project name
+            created_at: Optional[datetime]  Auto-set to now if not provided
+        
+        Methods:
+            __post_init__()             Sets created_at if None
+
+    @dataclass Session
+        Fields:
+            id: Optional[int]           Database primary key
+            project_name: str           Which project this belongs to
+            start_time: Optional[datetime]  When tracking began
+            end_time: Optional[datetime]    When tracking ended (None = active)
+            notes: str                  User-provided description
+        
+        Properties:
+            is_active -> bool           True if started but not ended
+            duration -> Optional[timedelta]  Elapsed time (live if active)
+            duration_seconds -> int     Duration as integer seconds
+        
+        Methods:
+            format_duration() -> str    Returns "Xh XXm XXs" string
+
+FUNCTIONS:
+
+    parse_duration_string(duration_str: str) -> timedelta
+        Parses human-friendly duration strings.
+        
+        Input formats supported:
+            "1h30m"  -> timedelta(hours=1, minutes=30)
+            "2h"     -> timedelta(hours=2)
+            "45m"    -> timedelta(minutes=45)
+            "90"     -> timedelta(minutes=90)
+        
+        Uses regex to extract hour and minute components.
+        Bare integers are interpreted as minutes.
+
+
+=== db.py ===
+
+CONFIGURATION:
+    DATA_DIR: Path          ~/.timetrack/
+    DATABASE_PATH: Path     ~/.timetrack/timetrack.db
+
+CONNECTION MANAGEMENT:
+
+    get_connection() -> sqlite3.Connection
+        Creates a new database connection.
+        Sets row_factory to sqlite3.Row for dict-like access.
+        Caller is responsible for closing.
+
+    init_database() -> None
+        Creates tables and indexes if they don't exist.
+        Safe to call multiple times (uses IF NOT EXISTS).
+        Called at the start of every CLI command.
+
+PROJECT OPERATIONS:
+
+    create_project(name: str) -> Project
+        Inserts new project, returns Project with assigned ID.
+        Raises sqlite3.IntegrityError if name already exists.
+
+    get_project(name: str) -> Optional[Project]
+        Fetches project by exact name match.
+        Returns None if not found.
+
+    get_or_create_project(name: str) -> Project
+        Returns existing project or creates new one.
+        Convenience wrapper around get_project + create_project.
+
+    list_projects() -> list[Project]
+        Returns all projects, sorted alphabetically (case-insensitive).
+
+SESSION OPERATIONS:
+
+    start_session(project_name: str) -> Session
+        Creates new session with current time as start_time.
+        Auto-creates project if needed.
+        Does NOT check for existing active session (caller should check).
+
+    get_active_session() -> Optional[Session]
+        Returns the session where end_time IS NULL.
+        Returns most recent if somehow multiple exist.
+        Returns None if no active session.
+
+    stop_session(notes: str = "") -> Optional[Session]
+        Sets end_time on active session to current time.
+        Returns the stopped Session, or None if no active session.
+
+    log_session(
+        project_name: str,
+        duration: timedelta,
+        notes: str = "",
+        date: Optional[datetime] = None
+    ) -> Session
+        Creates a completed session retroactively.
+        Calculates start_time by subtracting duration from end_time.
+        end_time defaults to now if date not specified.
+
+    get_sessions(
+        project_name: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        limit: int = 50
+    ) -> list[Session]
+        Queries completed sessions with optional filters.
+        All filters are AND-combined.
+        Returns newest first.
+
+    get_summary(
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> dict[str, int]
+        Returns {project_name: total_seconds} for date range.
+        Aggregation done in SQL for efficiency.
+
+    delete_session(session_id: int) -> bool
+        Removes session by ID.
+        Returns True if deleted, False if ID not found.
+
+    export_sessions_csv(filepath: str) -> None
+        Writes all completed sessions to CSV file.
+        Columns: Project, Start Time, End Time, Duration (seconds),
+                 Duration (hours), Notes
+
+
+=== cli.py ===
+
+FRAMEWORK:
+    Uses Typer for command parsing and Rich for terminal formatting.
+    
+    app = typer.Typer()     Main application instance
+    console = Console()      Rich console for styled output
+
+HELPER FUNCTIONS:
+
+    format_time(dt: datetime) -> str
+        Formats datetime as "YYYY-MM-DD HH:MM AM/PM"
+
+    format_duration_short(seconds: int) -> str
+        Formats as "H:MM:SS"
+
+    format_duration_human(seconds: int) -> str
+        Formats as "Xh Xm"
+
+    get_today_range() -> tuple[datetime, datetime]
+        Returns (start_of_today, start_of_tomorrow)
+
+    get_week_range() -> tuple[datetime, datetime]
+        Returns (monday_midnight, next_monday_midnight)
+
+COMMANDS:
+    All commands decorated with @app.command()
+    Each calls db.init_database() first to ensure tables exist.
+    
+    See PART I for complete command documentation.
+
+ENTRY POINT:
+    if __name__ == "__main__":
+        app()
+
+--------------------------------------------------------------------------------
+SECTION 4: EXTENDING THE APPLICATION
+--------------------------------------------------------------------------------
+
+ADDING A NEW COMMAND:
+
+    1. Define function in cli.py with @app.command() decorator
+    2. Use typer.Argument() for positional args
+    3. Use typer.Option() for --flags
+    4. Call db.init_database() at start
+    5. Use console.print() for output with Rich markup
+
+    Example skeleton:
+        @app.command()
+        def newcmd(
+            arg1: str = typer.Argument(..., help="Description"),
+            flag1: bool = typer.Option(False, "--flag", "-f", help="Description")
+        ):
+            """Docstring becomes help text."""
+            db.init_database()
+            # Implementation here
+            console.print("[green]Done[/green]")
+
+ADDING DATABASE COLUMNS:
+
+    1. Add column to CREATE TABLE in db.init_database()
+       - Use IF NOT EXISTS for table, but new columns need migration
+    2. For existing databases, add migration:
+        cursor.execute("""
+            ALTER TABLE sessions ADD COLUMN new_col TEXT DEFAULT ''
+        """)
+       Wrap in try/except to handle "column already exists"
+    3. Update relevant functions in db.py
+    4. Update Session or Project dataclass in models.py
+
+ADDING GUI WRAPPER:
+
+    The architecture supports direct GUI integration:
+    
+    1. Create new file (e.g., gui.py)
+    2. Import db module: from db import *
+    3. Button callbacks call db functions directly:
+        - Start button: db.start_session(project_name)
+        - Stop button: db.stop_session(notes)
+        - Refresh: db.get_active_session(), db.get_sessions()
+    4. No changes needed to db.py or models.py
+
+    Recommended GUI framework: CustomTkinter
+        - Modern appearance
+        - Lightweight (~2MB)
+        - Same API as tkinter
+
+POTENTIAL FEATURES (not implemented):
+
+    Tags System:
+        - Add tags TEXT column to sessions (comma-separated or JSON)
+        - Add --tag option to start, log commands
+        - Add tag filter to list, summary commands
+
+    Idle Detection:
+        - Background daemon process
+        - Check for user input events
+        - Auto-stop session after X minutes idle
+        - Requires: threading or separate process, platform-specific input detection
+
+    Pomodoro Mode:
+        - tt pomodoro <project> starts 25-minute session
+        - Auto-stops at timer end
+        - Notification (toast on Windows, notify-send on Linux)
+        - Requires: threading for timer, platform-specific notifications
+
+    Daily/Weekly Goals:
+        - New table: goals (project_name, target_seconds, period)
+        - tt goal set <project> <hours> --period week
+        - tt goal check shows progress bars
+        - Integrate into summary output
+
+    Reporting:
+        - tt report --format html generates visual report
+        - Charts using matplotlib or ASCII art
+        - Export to PDF
+
+--------------------------------------------------------------------------------
+SECTION 5: KNOWN LIMITATIONS
+--------------------------------------------------------------------------------
+
+1. SINGLE ACTIVE SESSION
+   Only one session can be active at a time. Parallel tracking of multiple
+   projects would require architecture changes.
+
+2. NO UNDO
+   delete and cancel operations are permanent. No recycle bin or soft delete.
+
+3. SESSION ID VISIBILITY
+   The list command doesn't show session IDs, making the delete command
+   difficult to use. Fix: add ID column to list output.
+
+4. NO DATA VALIDATION
+   Project names can contain any characters. No length limits enforced.
+   Could cause display issues with very long names.
+
+5. TIMEZONE HANDLING
+   All times are local system time. Moving the database between timezones
+   will cause display inconsistencies. Fix: store UTC, display local.
+
+6. NO CONCURRENT ACCESS PROTECTION
+   SQLite handles basic concurrency, but rapid simultaneous access from
+   multiple processes could cause issues. Not a problem for single-user CLI.
+
+--------------------------------------------------------------------------------
+SECTION 6: TESTING
+--------------------------------------------------------------------------------
+
+MANUAL TEST SEQUENCE:
+
+    # Clean slate
+    Delete ~/.timetrack/timetrack.db if exists
+
+    # Basic workflow
+    tt start "Test Project"
+    tt status                      # Should show active session
+    tt stop --notes "Testing"
+    tt list                        # Should show one session
+    tt summary                     # Should show time for Test Project
+
+    # Edge cases
+    tt start "Test Project"
+    tt start "Another"             # Should warn about active session
+    tt switch "Another"            # Should stop Test, start Another
+    tt cancel                      # Should prompt, then discard
+    tt status                      # Should show idle
+
+    # Retroactive logging
+    tt log "Past Project" 1h30m --date 2024-01-01
+    tt summary --period all        # Should include Past Project
+
+    # Export
+    tt export --output test.csv
+    # Open test.csv in spreadsheet, verify data
+
+AUTOMATED TESTING (not implemented):
+
+    Recommended approach:
+    1. Create tests/ directory
+    2. Use pytest framework
+    3. Use temporary database for each test:
+        @pytest.fixture
+        def temp_db(tmp_path):
+            db.DATABASE_PATH = tmp_path / "test.db"
+            db.init_database()
+            yield
+    4. Test each db.py function in isolation
+    5. Test CLI commands using typer.testing.CliRunner
+
+--------------------------------------------------------------------------------
+SECTION 7: BUILD AND DISTRIBUTION
+--------------------------------------------------------------------------------
+
+PYINSTALLER COMMAND:
+    python -m PyInstaller --onefile --name tt cli.py
+
+OUTPUT:
+    dist/tt.exe (Windows)
+    dist/tt (macOS/Linux)
+
+SIZE:
+    Approximately 15-25 MB depending on platform
+
+DISTRIBUTION CHECKLIST:
+    [ ] Test executable on clean machine without Python
+    [ ] Verify database created in correct location (~/.timetrack/)
+    [ ] Test all commands
+    [ ] Include README.md with executable
+
+CROSS-COMPILATION:
+    PyInstaller cannot cross-compile. To build for Windows, run PyInstaller
+    on Windows. Same for macOS and Linux.
+
+--------------------------------------------------------------------------------
+SECTION 8: CHANGELOG
+--------------------------------------------------------------------------------
+
+Version 1.0.0 (January 2025)
+    - Initial release
+    - Commands: start, stop, switch, status, log, list, summary,
+      projects, export, cancel, delete
+    - SQLite storage in user home directory
+    - Typer CLI with Rich formatting
+    - PyInstaller packaging support
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================
