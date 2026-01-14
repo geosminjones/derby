@@ -8,6 +8,7 @@ but with a visual interface and live timer updates.
 Run with: python gui.py
 """
 
+import sqlite3
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from datetime import datetime, timedelta
@@ -1356,7 +1357,7 @@ class LogSessionDialog:
             duration = parse_duration_string(duration_str)
             if duration.total_seconds() == 0:
                 raise ValueError("Duration must be greater than 0")
-        except Exception:
+        except ValueError:
             messagebox.showerror("Error", "Invalid duration format. Use formats like: 1h30m, 45m, 2h", parent=self.dialog)
             return
 
@@ -1435,6 +1436,10 @@ class AddProjectDialog:
             messagebox.showwarning("Warning", "Please enter a project name", parent=self.dialog)
             return
 
+        if not 1 <= priority <= 5:
+            messagebox.showwarning("Warning", "Priority must be between 1 and 5", parent=self.dialog)
+            return
+
         tags = [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else None
 
         try:
@@ -1442,7 +1447,7 @@ class AddProjectDialog:
             self.dialog.destroy()
             self.app.projects_tab.refresh()
             self.app.timer_tab.refresh()
-        except Exception as e:
+        except (sqlite3.IntegrityError, ValueError, sqlite3.OperationalError) as e:
             messagebox.showerror("Error", str(e), parent=self.dialog)
 
 
@@ -1499,7 +1504,7 @@ class AddBackgroundTaskDialog:
             self.dialog.destroy()
             self.app.projects_tab.refresh()
             self.app.timer_tab.refresh()
-        except Exception as e:
+        except (sqlite3.IntegrityError, ValueError, sqlite3.OperationalError) as e:
             messagebox.showerror("Error", str(e), parent=self.dialog)
 
 
@@ -1554,11 +1559,14 @@ class EditPriorityDialog:
     def _do_save(self):
         """Save the priority."""
         priority = self.priority_var.get()
+        if not 1 <= priority <= 5:
+            messagebox.showwarning("Warning", "Priority must be between 1 and 5", parent=self.dialog)
+            return
         try:
             db.update_project_priority(self.project_name, priority)
             self.dialog.destroy()
             self.app.projects_tab.refresh()
-        except Exception as e:
+        except (sqlite3.IntegrityError, ValueError, sqlite3.OperationalError) as e:
             messagebox.showerror("Error", str(e), parent=self.dialog)
 
 
@@ -1575,14 +1583,14 @@ class EditTagsDialog:
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(f"Edit Tags: {project_name}")
-        self.dialog.geometry("400x150")
+        self.dialog.geometry("400x180")
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
         # Center
         self.dialog.update_idletasks()
         x = parent.winfo_x() + (parent.winfo_width() - 400) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - 150) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - 180) // 2
         self.dialog.geometry(f"+{x}+{y}")
 
         self.tags_var = tk.StringVar(value=", ".join(current_tags))
@@ -1641,7 +1649,7 @@ class EditTagsDialog:
 
             self.dialog.destroy()
             self.app.projects_tab.refresh()
-        except Exception as e:
+        except (sqlite3.IntegrityError, ValueError, sqlite3.OperationalError) as e:
             messagebox.showerror("Error", str(e), parent=self.dialog)
 
 
@@ -1654,14 +1662,14 @@ class RenameProjectDialog:
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(f"Rename Project")
-        self.dialog.geometry("400x150")
+        self.dialog.geometry("400x180")
         self.dialog.transient(parent)
         self.dialog.grab_set()
 
         # Center
         self.dialog.update_idletasks()
         x = parent.winfo_x() + (parent.winfo_width() - 400) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - 150) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - 180) // 2
         self.dialog.geometry(f"+{x}+{y}")
 
         self.name_var = tk.StringVar(value=project_name)
@@ -1713,11 +1721,10 @@ class RenameProjectDialog:
             self.app.projects_tab.refresh()
             self.app.timer_tab.refresh()
             self.app.history_tab.refresh()
-        except Exception as e:
-            if "UNIQUE constraint" in str(e):
-                messagebox.showerror("Error", f"A project named '{new_name}' already exists", parent=self.dialog)
-            else:
-                messagebox.showerror("Error", str(e), parent=self.dialog)
+        except sqlite3.IntegrityError:
+            messagebox.showerror("Error", f"A project named '{new_name}' already exists", parent=self.dialog)
+        except (ValueError, sqlite3.OperationalError) as e:
+            messagebox.showerror("Error", str(e), parent=self.dialog)
 
 
 if __name__ == "__main__":
