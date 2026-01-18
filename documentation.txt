@@ -1,5 +1,5 @@
 ================================================================================
-TIMETRACK CLI - COMPLETE DOCUMENTATION
+DERBY CLI - COMPLETE DOCUMENTATION
 ================================================================================
 
 Generated: January 2025
@@ -24,15 +24,18 @@ DEPENDENCIES:
     - Python 3.10 or higher
     - typer[all] >= 0.9.0 (includes Rich for terminal formatting)
 
-INSTALL STEPS:
+CLI INSTALL STEPS:
     1. Place all .py files in a single directory
     2. Run: pip install -r requirements.txt
     3. Test: python cli.py --help
 
-BUILDING STANDALONE EXECUTABLE:
+BUILDING STANDALONE CLI EXECUTABLE:
     1. pip install pyinstaller
     2. python -m PyInstaller --onefile --name tt cli.py
     3. Executable created at: dist/tt.exe (Windows) or dist/tt (Unix)
+
+BUILDING STANDALONE GUI EXECUTABLE:
+pyinstaller --onefile gui.py --name derby --icon=jockey.ico --noconsole
 
 DATA STORAGE LOCATION:
     Windows:  C:\Users\<username>\.timetrack\timetrack.db

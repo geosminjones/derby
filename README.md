@@ -15,6 +15,10 @@ python gui.py
 python cli.py start "Project Name"    # Start tracking
 python cli.py stop                     # Stop tracking
 python cli.py status                   # See current state
+
+# Build the executable for GUI use
+pyinstaller --onefile gui.py --name derby --icon=jockey.ico --noconsole
+
 ```
 
 ## GUI Features
@@ -58,8 +62,11 @@ To create a single file you can run without Python installed:
 # Install PyInstaller
 pip install pyinstaller
 
-# Build the executable
+# Build the executable for command-line interface use
 pyinstaller --onefile cli.py --name tt
+
+# Build the executable for GUI use
+pyinstaller --onefile gui.py --name derby --icon=jockey.ico
 
 # The executable will be in dist/tt (or dist/tt.exe on Windows)
 ```

@@ -114,6 +114,37 @@ def _migrate_database(conn: sqlite3.Connection):
         _set_schema_version(conn, 2)
         conn.commit()
 
+    if current_version < 3:
+        cursor = conn.cursor()
+
+        # Add pause-related columns to sessions
+        try:
+            cursor.execute("""
+                ALTER TABLE sessions
+                ADD COLUMN is_paused INTEGER DEFAULT 0
+            """)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        try:
+            cursor.execute("""
+                ALTER TABLE sessions
+                ADD COLUMN paused_seconds INTEGER DEFAULT 0
+            """)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        try:
+            cursor.execute("""
+                ALTER TABLE sessions
+                ADD COLUMN pause_started_at TEXT
+            """)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        _set_schema_version(conn, 3)
+        conn.commit()
+
 
 # =============================================================================
 # CONNECTION MANAGEMENT
@@ -200,6 +231,9 @@ def init_database():
 
         # Run migrations for new features
         _migrate_database(conn)
+
+    # Split any existing sessions that span midnight
+    split_sessions_at_midnight()
 
 
 # =============================================================================
@@ -609,6 +643,48 @@ def rename_project(old_name: str, new_name: str) -> Optional[Project]:
     return project
 
 
+def delete_project(project_name: str, delete_sessions: bool = False) -> bool:
+    """
+    Delete a project by name.
+
+    Args:
+        project_name: Name of the project to delete
+        delete_sessions: If True, also delete all sessions associated with the project.
+                        If False, sessions are kept but become orphaned.
+
+    Returns:
+        True if project was deleted, False if project not found.
+    """
+    project = get_project(project_name)
+    if project is None:
+        return False
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # Delete associated sessions if requested
+        if delete_sessions:
+            cursor.execute(
+                "DELETE FROM sessions WHERE project_name = ?",
+                (project_name,)
+            )
+
+        # Delete project-tag associations (handled by CASCADE, but explicit for clarity)
+        cursor.execute(
+            "DELETE FROM project_tags WHERE project_id = ?",
+            (project.id,)
+        )
+
+        # Delete the project
+        cursor.execute(
+            "DELETE FROM projects WHERE id = ?",
+            (project.id,)
+        )
+
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 # =============================================================================
 # SESSION OPERATIONS
 # =============================================================================
@@ -663,7 +739,8 @@ def get_active_session() -> Optional[Session]:
         # WHERE end_time IS NULL finds sessions that haven't been stopped
         # ORDER BY start_time DESC + LIMIT 1 gets the most recent one
         cursor.execute("""
-            SELECT id, project_name, start_time, end_time, notes
+            SELECT id, project_name, start_time, end_time, notes,
+                   is_paused, paused_seconds, pause_started_at
             FROM sessions
             WHERE end_time IS NULL
             ORDER BY start_time DESC
@@ -680,7 +757,10 @@ def get_active_session() -> Optional[Session]:
             project_name=row["project_name"],
             start_time=datetime.fromisoformat(row["start_time"]),
             end_time=None,
-            notes=row["notes"] or ""
+            notes=row["notes"] or "",
+            is_paused=bool(row["is_paused"]) if row["is_paused"] is not None else False,
+            paused_seconds=row["paused_seconds"] or 0,
+            pause_started_at=datetime.fromisoformat(row["pause_started_at"]) if row["pause_started_at"] else None
         )
 
 
@@ -695,7 +775,8 @@ def get_active_sessions() -> list[Session]:
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT id, project_name, start_time, end_time, notes
+            SELECT id, project_name, start_time, end_time, notes,
+                   is_paused, paused_seconds, pause_started_at
             FROM sessions
             WHERE end_time IS NULL
             ORDER BY start_time DESC
@@ -709,7 +790,10 @@ def get_active_sessions() -> list[Session]:
                 project_name=row["project_name"],
                 start_time=datetime.fromisoformat(row["start_time"]),
                 end_time=None,
-                notes=row["notes"] or ""
+                notes=row["notes"] or "",
+                is_paused=bool(row["is_paused"]) if row["is_paused"] is not None else False,
+                paused_seconds=row["paused_seconds"] or 0,
+                pause_started_at=datetime.fromisoformat(row["pause_started_at"]) if row["pause_started_at"] else None
             )
             for row in rows
         ]
@@ -729,7 +813,8 @@ def get_active_session_by_project(project_name: str) -> Optional[Session]:
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT id, project_name, start_time, end_time, notes
+            SELECT id, project_name, start_time, end_time, notes,
+                   is_paused, paused_seconds, pause_started_at
             FROM sessions
             WHERE end_time IS NULL AND project_name = ?
             ORDER BY start_time DESC
@@ -746,13 +831,18 @@ def get_active_session_by_project(project_name: str) -> Optional[Session]:
             project_name=row["project_name"],
             start_time=datetime.fromisoformat(row["start_time"]),
             end_time=None,
-            notes=row["notes"] or ""
+            notes=row["notes"] or "",
+            is_paused=bool(row["is_paused"]) if row["is_paused"] is not None else False,
+            paused_seconds=row["paused_seconds"] or 0,
+            pause_started_at=datetime.fromisoformat(row["pause_started_at"]) if row["pause_started_at"] else None
         )
 
 
 def stop_session(project_name: Optional[str] = None, notes: str = "") -> Optional[Session]:
     """
     Stop an active session.
+
+    If the session is currently paused, accumulates the final paused time before stopping.
 
     Args:
         project_name: If provided, stop session for this specific project.
@@ -773,6 +863,12 @@ def stop_session(project_name: Optional[str] = None, notes: str = "") -> Optiona
 
     now = datetime.now()
 
+    # If session was paused, accumulate the final paused time
+    final_paused_seconds = active.paused_seconds
+    if active.is_paused and active.pause_started_at:
+        additional_paused = int((now - active.pause_started_at).total_seconds())
+        final_paused_seconds += additional_paused
+
     with get_connection() as conn:
         cursor = conn.cursor()
 
@@ -781,15 +877,21 @@ def stop_session(project_name: Optional[str] = None, notes: str = "") -> Optiona
         # WHERE ensures we only update the right row
         cursor.execute("""
             UPDATE sessions
-            SET end_time = ?, notes = ?
+            SET end_time = ?, notes = ?, is_paused = 0, pause_started_at = NULL, paused_seconds = ?
             WHERE id = ?
-        """, (now.isoformat(), notes, active.id))
+        """, (now.isoformat(), notes, final_paused_seconds, active.id))
 
         conn.commit()
 
     # Update the in-memory object to reflect the change
     active.end_time = now
     active.notes = notes
+    active.is_paused = False
+    active.pause_started_at = None
+    active.paused_seconds = final_paused_seconds
+
+    # Split any sessions that crossed midnight boundaries
+    split_sessions_at_midnight()
 
     return active
 
@@ -826,7 +928,135 @@ def stop_all_sessions(notes: str = "") -> list[Session]:
 
         conn.commit()
 
+    # Split any sessions that crossed midnight boundaries
+    split_sessions_at_midnight()
+
     return active_sessions
+
+
+def pause_session(session_id: int) -> Optional[Session]:
+    """
+    Pause an active session.
+
+    Args:
+        session_id: ID of the session to pause
+
+    Returns:
+        The paused Session, or None if session not found or already paused
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # First check if session exists and is active (not ended) and not already paused
+        cursor.execute("""
+            SELECT id, project_name, start_time, end_time, notes,
+                   is_paused, paused_seconds, pause_started_at
+            FROM sessions
+            WHERE id = ? AND end_time IS NULL
+        """, (session_id,))
+
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        # Already paused
+        if row["is_paused"]:
+            return Session(
+                id=row["id"],
+                project_name=row["project_name"],
+                start_time=datetime.fromisoformat(row["start_time"]),
+                end_time=None,
+                notes=row["notes"] or "",
+                is_paused=True,
+                paused_seconds=row["paused_seconds"] or 0,
+                pause_started_at=datetime.fromisoformat(row["pause_started_at"]) if row["pause_started_at"] else None
+            )
+
+        now = datetime.now()
+
+        cursor.execute("""
+            UPDATE sessions
+            SET is_paused = 1, pause_started_at = ?
+            WHERE id = ?
+        """, (now.isoformat(), session_id))
+
+        conn.commit()
+
+        return Session(
+            id=row["id"],
+            project_name=row["project_name"],
+            start_time=datetime.fromisoformat(row["start_time"]),
+            end_time=None,
+            notes=row["notes"] or "",
+            is_paused=True,
+            paused_seconds=row["paused_seconds"] or 0,
+            pause_started_at=now
+        )
+
+
+def resume_session(session_id: int) -> Optional[Session]:
+    """
+    Resume a paused session.
+
+    Args:
+        session_id: ID of the session to resume
+
+    Returns:
+        The resumed Session, or None if session not found or not paused
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # First check if session exists and is paused
+        cursor.execute("""
+            SELECT id, project_name, start_time, end_time, notes,
+                   is_paused, paused_seconds, pause_started_at
+            FROM sessions
+            WHERE id = ? AND end_time IS NULL
+        """, (session_id,))
+
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        # Not paused
+        if not row["is_paused"]:
+            return Session(
+                id=row["id"],
+                project_name=row["project_name"],
+                start_time=datetime.fromisoformat(row["start_time"]),
+                end_time=None,
+                notes=row["notes"] or "",
+                is_paused=False,
+                paused_seconds=row["paused_seconds"] or 0,
+                pause_started_at=None
+            )
+
+        now = datetime.now()
+        pause_started = datetime.fromisoformat(row["pause_started_at"]) if row["pause_started_at"] else now
+        additional_paused = int((now - pause_started).total_seconds())
+        new_paused_seconds = (row["paused_seconds"] or 0) + additional_paused
+
+        cursor.execute("""
+            UPDATE sessions
+            SET is_paused = 0, pause_started_at = NULL, paused_seconds = ?
+            WHERE id = ?
+        """, (new_paused_seconds, session_id))
+
+        conn.commit()
+
+        return Session(
+            id=row["id"],
+            project_name=row["project_name"],
+            start_time=datetime.fromisoformat(row["start_time"]),
+            end_time=None,
+            notes=row["notes"] or "",
+            is_paused=False,
+            paused_seconds=new_paused_seconds,
+            pause_started_at=None
+        )
 
 
 def log_session(
@@ -868,13 +1098,18 @@ def log_session(
         conn.commit()
         session_id = cursor.lastrowid
 
-    return Session(
+    session = Session(
         id=session_id,
         project_name=project_name,
         start_time=start_time,
         end_time=end_time,
         notes=notes
     )
+
+    # Split any sessions that crossed midnight boundaries
+    split_sessions_at_midnight()
+
+    return session
 
 
 def get_sessions(
@@ -1134,6 +1369,218 @@ def get_summary_by_day(
     )
 
     return sorted_result
+
+
+def get_summary_by_tag(
+    start_date: datetime,
+    end_date: datetime
+) -> dict[str, dict]:
+    """
+    Get per-tag, per-project, per-day breakdown of time tracked.
+
+    Projects with multiple tags will appear under each tag group.
+    Untagged projects appear under "Untagged" at the end.
+
+    Args:
+        start_date: Count sessions starting on or after this time
+        end_date: Count sessions starting before this time
+
+    Returns:
+        Dictionary with structure:
+        {
+            tag_name: {
+                "projects": {
+                    project_name: {
+                        "days": {date_str: seconds},
+                        "total": int,
+                        "has_multiple_tags": bool
+                    }
+                },
+                "total": int
+            }
+        }
+        Results are ordered by tag name alphabetically, with "Untagged" at the end.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # Get all projects that are NOT background tasks with their tags
+        cursor.execute("""
+            SELECT p.id, p.name
+            FROM projects p
+            WHERE p.is_background = 0 OR p.is_background IS NULL
+        """)
+        project_rows = cursor.fetchall()
+
+        # Get all tags for each project
+        cursor.execute("""
+            SELECT pt.project_id, t.name as tag_name
+            FROM project_tags pt
+            JOIN tags t ON t.id = pt.tag_id
+        """)
+        tag_rows = cursor.fetchall()
+
+        # Build project -> tags mapping
+        project_tags: dict[int, list[str]] = {}
+        for row in tag_rows:
+            pid = row["project_id"]
+            if pid not in project_tags:
+                project_tags[pid] = []
+            project_tags[pid].append(row["tag_name"])
+
+        # Build project_id -> name mapping
+        project_id_to_name: dict[int, str] = {row["id"]: row["name"] for row in project_rows}
+
+        # Get per-day session data for regular projects
+        cursor.execute("""
+            SELECT
+                s.project_name,
+                date(s.start_time) as session_date,
+                SUM(
+                    strftime('%s', s.end_time) - strftime('%s', s.start_time)
+                ) as total_seconds
+            FROM sessions s
+            LEFT JOIN projects p ON s.project_name = p.name
+            WHERE s.end_time IS NOT NULL
+              AND s.start_time >= ?
+              AND s.start_time < ?
+              AND (p.is_background = 0 OR p.is_background IS NULL)
+            GROUP BY s.project_name, date(s.start_time)
+        """, (start_date.isoformat(), end_date.isoformat()))
+
+        session_rows = cursor.fetchall()
+
+    # Build project data structure
+    project_data: dict[str, dict] = {}
+    for row in session_rows:
+        project_name = row["project_name"]
+        if project_name not in project_data:
+            project_data[project_name] = {"days": {}, "total": 0}
+        project_data[project_name]["days"][row["session_date"]] = int(row["total_seconds"])
+        project_data[project_name]["total"] += int(row["total_seconds"])
+
+    # Build result grouped by tag
+    result: dict[str, dict] = {}
+
+    # Get name -> id mapping for looking up tags
+    name_to_id = {v: k for k, v in project_id_to_name.items()}
+
+    for project_name, pdata in project_data.items():
+        project_id = name_to_id.get(project_name)
+        tags = project_tags.get(project_id, []) if project_id else []
+        has_multiple_tags = len(tags) > 1
+
+        if not tags:
+            # Untagged
+            tag_name = "Untagged"
+            if tag_name not in result:
+                result[tag_name] = {"projects": {}, "total": 0}
+            result[tag_name]["projects"][project_name] = {
+                "days": pdata["days"].copy(),
+                "total": pdata["total"],
+                "has_multiple_tags": False
+            }
+            result[tag_name]["total"] += pdata["total"]
+        else:
+            # Add to each tag group
+            for tag_name in tags:
+                if tag_name not in result:
+                    result[tag_name] = {"projects": {}, "total": 0}
+                result[tag_name]["projects"][project_name] = {
+                    "days": pdata["days"].copy(),
+                    "total": pdata["total"],
+                    "has_multiple_tags": has_multiple_tags
+                }
+                result[tag_name]["total"] += pdata["total"]
+
+    # Sort tags alphabetically, with Untagged at the end
+    sorted_result = {}
+    for tag_name in sorted(result.keys(), key=lambda t: (t == "Untagged", t.lower())):
+        tag_data = result[tag_name]
+        # Sort projects within each tag by total time DESC
+        sorted_projects = dict(
+            sorted(tag_data["projects"].items(), key=lambda x: -x[1]["total"])
+        )
+        sorted_result[tag_name] = {
+            "projects": sorted_projects,
+            "total": tag_data["total"]
+        }
+
+    return sorted_result
+
+
+def split_sessions_at_midnight() -> int:
+    """
+    Split any completed sessions that span midnight into separate day sessions.
+
+    For each session that starts on day N and ends on day N+1 (or later),
+    this function:
+    1. Ends the original session at 23:59:59 of day N
+    2. Creates new sessions for each subsequent day, starting at 00:00:00
+
+    Returns:
+        Number of new sessions created from splits
+    """
+    splits_created = 0
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # Find all completed sessions that span midnight
+        # date(start_time) != date(end_time) means session crosses at least one midnight
+        cursor.execute("""
+            SELECT id, project_name, start_time, end_time, notes
+            FROM sessions
+            WHERE end_time IS NOT NULL
+              AND date(start_time) != date(end_time)
+        """)
+
+        sessions_to_split = cursor.fetchall()
+
+        for row in sessions_to_split:
+            session_id = row["id"]
+            project_name = row["project_name"]
+            start_time = datetime.fromisoformat(row["start_time"])
+            end_time = datetime.fromisoformat(row["end_time"])
+            notes = row["notes"] or ""
+
+            # Calculate the end of the first day (23:59:59)
+            first_day_end = start_time.replace(hour=23, minute=59, second=59, microsecond=0)
+
+            # Update original session to end at midnight of the first day
+            cursor.execute("""
+                UPDATE sessions
+                SET end_time = ?
+                WHERE id = ?
+            """, (first_day_end.isoformat(), session_id))
+
+            # Create sessions for each subsequent day
+            current_day_start = (start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+                                + timedelta(days=1))
+
+            while current_day_start.date() <= end_time.date():
+                # Determine the end time for this day's segment
+                if current_day_start.date() == end_time.date():
+                    # This is the final day - use the actual end time
+                    segment_end = end_time
+                else:
+                    # Not the final day - end at 23:59:59
+                    segment_end = current_day_start.replace(hour=23, minute=59, second=59, microsecond=0)
+
+                # Insert new session for this day
+                cursor.execute("""
+                    INSERT INTO sessions (project_name, start_time, end_time, notes)
+                    VALUES (?, ?, ?, ?)
+                """, (project_name, current_day_start.isoformat(), segment_end.isoformat(), notes))
+
+                splits_created += 1
+
+                # Move to next day
+                current_day_start += timedelta(days=1)
+
+        conn.commit()
+
+    return splits_created
 
 
 def delete_session(session_id: int) -> bool:

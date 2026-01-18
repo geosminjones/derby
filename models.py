@@ -68,21 +68,19 @@ class Project:
 class Session:
     """
     Represents a single tracked time block.
-    
+
     A session has a start time, optionally an end time (None if still running),
-    and belongs to a project.
+    and belongs to a project. Sessions can be paused and resumed.
     """
-    
+
     id: Optional[int] = None          # None until saved to DB
     project_name: str = ""            # Which project this session belongs to
     start_time: Optional[datetime] = None  # When the timer started
     end_time: Optional[datetime] = None    # When the timer stopped (None = still active)
     notes: str = ""                   # Optional description of what you did
-    
-    # field(default_factory=...) is needed for mutable defaults
-    # If you wrote `tags: list = []`, ALL instances would share the same list object
-    # default_factory creates a NEW empty list for each instance
-    # (Not using tags yet, but leaving this pattern here for future reference)
+    is_paused: bool = False           # True if session is currently paused
+    paused_seconds: int = 0           # Total accumulated paused time in seconds
+    pause_started_at: Optional[datetime] = None  # When current pause began (None if not paused)
     
     @property
     def is_active(self) -> bool:
@@ -97,23 +95,37 @@ class Session:
     @property
     def duration(self) -> Optional[timedelta]:
         """
-        Calculate how long this session lasted (or has lasted so far).
-        
+        Calculate how long this session lasted (or has lasted so far),
+        excluding any paused time.
+
         Returns:
             timedelta object if session has started, None otherwise
-            
+
         timedelta is Python's way of representing a span of time.
         You can do math with it: timedelta + datetime = datetime
         """
         # Can't have duration without a start time
         if self.start_time is None:
             return None
-        
+
         # If session is still active, measure against current time
         # Otherwise, measure against end time
         end = self.end_time if self.end_time else datetime.now()
-        
-        return end - self.start_time
+
+        total_duration = end - self.start_time
+
+        # Subtract accumulated paused time
+        total_duration -= timedelta(seconds=self.paused_seconds)
+
+        # If currently paused, also subtract time since pause started
+        if self.is_paused and self.pause_started_at:
+            total_duration -= (datetime.now() - self.pause_started_at)
+
+        # Ensure duration is never negative
+        if total_duration.total_seconds() < 0:
+            return timedelta(seconds=0)
+
+        return total_duration
     
     @property
     def duration_seconds(self) -> int:
