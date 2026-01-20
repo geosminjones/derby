@@ -145,6 +145,20 @@ def _migrate_database(conn: sqlite3.Connection):
         _set_schema_version(conn, 3)
         conn.commit()
 
+    if current_version < 4:
+        cursor = conn.cursor()
+
+        # Create settings table for app preferences (e.g., theme)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+
+        _set_schema_version(conn, 4)
+        conn.commit()
+
 
 # =============================================================================
 # CONNECTION MANAGEMENT
@@ -234,6 +248,44 @@ def init_database():
 
     # Split any existing sessions that span midnight
     split_sessions_at_midnight()
+
+
+# =============================================================================
+# SETTINGS OPERATIONS
+# =============================================================================
+
+def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+    """
+    Get a setting value from the database.
+
+    Args:
+        key: Setting key name
+        default: Value to return if key not found
+
+    Returns:
+        Setting value or default
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    """
+    Set a setting value in the database.
+
+    Args:
+        key: Setting key name
+        value: Value to store
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)
+        """, (key, value))
+        conn.commit()
 
 
 # =============================================================================
