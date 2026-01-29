@@ -7,13 +7,16 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import customtkinter as ctk
+from tkinter import ttk
 
 import db
 import themes
+from ctk_table import CTkTable
 from themes import FONT_FAMILY
+from gui_utils import batch_update
 
 if TYPE_CHECKING:
-    from gui import DerbyApp, TreeviewFrame
+    from gui import DerbyApp
 
 
 # Priority labels for display
@@ -39,6 +42,8 @@ class SummaryTab:
         self.sort_var = ctk.StringVar(value="priority")
         self.group_var = ctk.BooleanVar(value=False)
         self.current_view = "standard"  # "standard", "weekly", or "monthly"
+        self.bg_current_view = "standard"  # Track bg table view separately
+        self._tables_initialized = False  # Track if tables have been created
         self._build_ui()
 
     def _build_ui(self):
@@ -87,23 +92,30 @@ class SummaryTab:
         )
         group_check.pack(side=ctk.RIGHT, padx=10)
 
-        # Main content area
-        content_frame = ctk.CTkFrame(self.frame, fg_color="transparent")
-        content_frame.pack(fill=ctk.BOTH, expand=True, padx=5, pady=5)
+        # Main content area - use ttk.PanedWindow for resizable split
+        colors = themes.get_colors()
+
+        # Configure ttk style for the paned window sash
+        style = ttk.Style()
+        style.configure("Summary.TPanedwindow", background=colors["bg_dark"])
+
+        self.paned = ttk.PanedWindow(self.frame, orient="vertical", style="Summary.TPanedwindow")
+        self.paned.pack(fill=ctk.BOTH, expand=True, padx=5, pady=5)
 
         # =====================================================================
-        # TOP HALF: Regular Projects Summary
+        # TOP PANE: Regular Projects Summary
         # =====================================================================
-        top_frame = ctk.CTkFrame(content_frame, fg_color=themes.get_colors()["container_bg"])
-        top_frame.pack(fill=ctk.BOTH, expand=True, pady=(0, 5))
+        top_frame = ctk.CTkFrame(self.paned, fg_color=colors["container_bg"])
 
         ctk.CTkLabel(top_frame, text="Projects", font=ctk.CTkFont(family=FONT_FAMILY, weight="bold")).pack(anchor="w", padx=10, pady=5)
 
-        self.tree_container = ctk.CTkFrame(top_frame, fg_color="transparent")
-        self.tree_container.pack(fill=ctk.BOTH, expand=True, padx=10)
+        self.table_container = ctk.CTkFrame(top_frame, fg_color="transparent")
+        self.table_container.pack(fill=ctk.BOTH, expand=True, padx=10)
 
-        # Create standard view treeview for projects
-        self._create_standard_treeview()
+        # Tables will be created lazily on first refresh
+        self.table = None
+        self.table_weekly = None
+        self.table_monthly = None
 
         # Project total label
         self.project_total_var = ctk.StringVar(value="Projects Total: 0h 00m")
@@ -111,211 +123,218 @@ class SummaryTab:
         project_total_label.pack(pady=3)
 
         # =====================================================================
-        # BOTTOM HALF: Background Tasks Summary
+        # BOTTOM PANE: Background Tasks Summary
         # =====================================================================
-        bottom_frame = ctk.CTkFrame(content_frame, fg_color=themes.get_colors()["container_bg"])
-        bottom_frame.pack(fill=ctk.BOTH, expand=True, pady=(5, 0))
+        bottom_frame = ctk.CTkFrame(self.paned, fg_color=colors["container_bg"])
 
         ctk.CTkLabel(bottom_frame, text="Background Tasks", font=ctk.CTkFont(family=FONT_FAMILY, weight="bold")).pack(anchor="w", padx=10, pady=5)
 
-        self.bg_tree_container = ctk.CTkFrame(bottom_frame, fg_color="transparent")
-        self.bg_tree_container.pack(fill=ctk.BOTH, expand=True, padx=10)
+        self.bg_table_container = ctk.CTkFrame(bottom_frame, fg_color="transparent")
+        self.bg_table_container.pack(fill=ctk.BOTH, expand=True, padx=10)
 
-        # Create treeview for background tasks (simpler - no priority column)
-        self._create_bg_standard_treeview()
+        # Background task tables will be created lazily on first refresh
+        self.bg_table = None
+        self.bg_table_weekly = None
+        self.bg_table_monthly = None
 
         # Background tasks total label
         self.bg_total_var = ctk.StringVar(value="Tasks Total: 0h 00m")
         bg_total_label = ctk.CTkLabel(bottom_frame, textvariable=self.bg_total_var, font=ctk.CTkFont(family=FONT_FAMILY, weight="bold"))
         bg_total_label.pack(pady=3)
 
+        # Add frames to paned window with weight for initial sizing
+        self.paned.add(top_frame, weight=2)
+        self.paned.add(bottom_frame, weight=1)
+
         # Combined total at bottom
         self.total_var = ctk.StringVar(value="Combined Total: 0h 00m")
         total_label = ctk.CTkLabel(self.frame, textvariable=self.total_var, font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"))
         total_label.pack(pady=5)
 
-    def _create_standard_treeview(self):
-        """Create the standard (non-weekly) treeview for projects."""
-        from gui import TreeviewFrame
+    def _initialize_tables(self):
+        """Create all three table variants for both projects and background tasks."""
+        if self._tables_initialized:
+            return
 
-        self.tree_frame = TreeviewFrame(
-            self.tree_container,
-            columns=("project", "priority", "time", "hours"),
-            headings=["Project", "Priority", "Time", "Hours"],
-            widths=[200, 100, 100, 80],
-            height=5
+        # =====================================================================
+        # PROJECT TABLES
+        # =====================================================================
+
+        # Standard view table (for today/all time)
+        self.table_standard = CTkTable(
+            self.table_container,
+            columns=["Project", "Priority", "Tags", "Time", "Hours"],
+            widths=[160, 50, 260, 90, 70],
+            anchors=['w', 'w', 'w', 'w', 'w'],
+            show_header=True,
+            show_dividers=False
         )
-        self.tree_frame.pack(fill=ctk.BOTH, expand=True)
-        self.tree = self.tree_frame.tree
-        self.current_view = "standard"
 
-    def _create_bg_standard_treeview(self):
-        """Create the standard treeview for background tasks (no priority)."""
-        from gui import TreeviewFrame
+        # Weekly view table (placeholder columns, will be updated dynamically)
+        self.table_weekly = CTkTable(
+            self.table_container,
+            columns=["Project", "Priority", "Tags", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Total"],
+            widths=[100, 50, 200, 50, 50, 50, 50, 50, 50, 50, 55],
+            anchors=['w'] + ['w'] * 10,
+            show_header=True,
+            show_dividers=False
+        )
 
-        self.bg_tree_frame = TreeviewFrame(
-            self.bg_tree_container,
-            columns=("task", "time", "hours"),
-            headings=["Task", "Time", "Hours"],
+        # Monthly view table (placeholder columns, will be updated dynamically)
+        self.table_monthly = CTkTable(
+            self.table_container,
+            columns=["Project", "Priority", "Tags", "1-5", "6-10", "11-15", "16-20", "21-25", "26-31", "Total"],
+            widths=[100, 50, 200, 50, 50, 50, 50, 50, 50, 55],
+            anchors=['w'] + ['w'] * 9,
+            show_header=True,
+            show_dividers=False
+        )
+
+        # =====================================================================
+        # BACKGROUND TASK TABLES
+        # =====================================================================
+
+        # Standard view table
+        self.bg_table_standard = CTkTable(
+            self.bg_table_container,
+            columns=["Task", "Time", "Hours"],
             widths=[250, 120, 100],
-            height=5
+            anchors=['w', 'w', 'w'],
+            show_header=True,
+            show_dividers=False
         )
-        self.bg_tree_frame.pack(fill=ctk.BOTH, expand=True)
-        self.bg_tree = self.bg_tree_frame.tree
-        self.bg_current_view = "standard"
 
-    def _create_weekly_treeview(self, week_start: datetime):
-        """Create the weekly view treeview with day columns for projects."""
-        from gui import TreeviewFrame
+        # Weekly view table
+        self.bg_table_weekly = CTkTable(
+            self.bg_table_container,
+            columns=["Task", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Total"],
+            widths=[120, 55, 55, 55, 55, 55, 55, 55, 60],
+            anchors=['w'] + ['w'] * 8,
+            show_header=True,
+            show_dividers=False
+        )
 
-        # Build column headers with dates (single line: "Mon 1/6")
-        day_columns = []
-        day_headings = ["Project"]
-        day_widths = [120]
+        # Monthly view table
+        self.bg_table_monthly = CTkTable(
+            self.bg_table_container,
+            columns=["Task", "1-5", "6-10", "11-15", "16-20", "21-25", "26-31", "Total"],
+            widths=[120, 55, 55, 55, 55, 55, 55, 60],
+            anchors=['w'] + ['w'] * 7,
+            show_header=True,
+            show_dividers=False
+        )
 
+        # Set default active tables
+        self.table = self.table_standard
+        self.bg_table = self.bg_table_standard
+
+        # Show only standard tables initially
+        self._show_table_view("standard")
+        self._show_bg_table_view("standard")
+
+        self._tables_initialized = True
+
+    def _show_table_view(self, view: str):
+        """Show the specified project table and hide others."""
+        # Unpack all tables (use getattr to handle case where tables aren't created yet)
+        if getattr(self, 'table_standard', None):
+            self.table_standard.pack_forget()
+        if getattr(self, 'table_weekly', None):
+            self.table_weekly.pack_forget()
+        if getattr(self, 'table_monthly', None):
+            self.table_monthly.pack_forget()
+
+        # Pack the requested table
+        if view == "standard":
+            self.table = self.table_standard
+        elif view == "weekly":
+            self.table = self.table_weekly
+        elif view == "monthly":
+            self.table = self.table_monthly
+
+        if self.table:
+            self.table.pack(fill=ctk.BOTH, expand=True)
+        self.current_view = view
+
+    def _show_bg_table_view(self, view: str):
+        """Show the specified background task table and hide others."""
+        # Unpack all tables (use getattr to handle case where tables aren't created yet)
+        if getattr(self, 'bg_table_standard', None):
+            self.bg_table_standard.pack_forget()
+        if getattr(self, 'bg_table_weekly', None):
+            self.bg_table_weekly.pack_forget()
+        if getattr(self, 'bg_table_monthly', None):
+            self.bg_table_monthly.pack_forget()
+
+        # Pack the requested table
+        if view == "standard":
+            self.bg_table = self.bg_table_standard
+        elif view == "weekly":
+            self.bg_table = self.bg_table_weekly
+        elif view == "monthly":
+            self.bg_table = self.bg_table_monthly
+
+        if self.bg_table:
+            self.bg_table.pack(fill=ctk.BOTH, expand=True)
+        self.bg_current_view = view
+
+    def _update_weekly_columns(self, week_start: datetime):
+        """Update the weekly table column headers with actual dates."""
+        day_headings = ["Project", "Priority", "Tags"]
         for i in range(7):
             day_date = week_start + timedelta(days=i)
-            col_id = f"day{i}"
-            day_columns.append(col_id)
             day_headings.append(f"{self.DAY_NAMES[i]} {day_date.day}")
-            day_widths.append(55)
-
-        columns = ["project"] + day_columns + ["total"]
         day_headings.append("Total")
-        day_widths.append(60)
 
-        self.tree_frame = TreeviewFrame(
-            self.tree_container,
-            columns=columns,
-            headings=day_headings,
-            widths=day_widths,
-            height=5
-        )
-        self.tree_frame.pack(fill=ctk.BOTH, expand=True)
-        self.tree = self.tree_frame.tree
-        self.current_view = "weekly"
+        # Update project table headers
+        for i, heading in enumerate(day_headings):
+            self.table_weekly.update_header(i, heading)
 
-    def _create_bg_weekly_treeview(self, week_start: datetime):
-        """Create the weekly view treeview for background tasks."""
-        from gui import TreeviewFrame
-
-        day_columns = []
-        day_headings = ["Task"]
-        day_widths = [120]
-
+        # Update bg task table headers (no Priority/Tags columns)
+        bg_headings = ["Task"]
         for i in range(7):
             day_date = week_start + timedelta(days=i)
-            col_id = f"day{i}"
-            day_columns.append(col_id)
-            day_headings.append(f"{self.DAY_NAMES[i]} {day_date.day}")
-            day_widths.append(55)
+            bg_headings.append(f"{self.DAY_NAMES[i]} {day_date.day}")
+        bg_headings.append("Total")
+        for i, heading in enumerate(bg_headings):
+            self.bg_table_weekly.update_header(i, heading)
 
-        columns = ["task"] + day_columns + ["total"]
-        day_headings.append("Total")
-        day_widths.append(60)
-
-        self.bg_tree_frame = TreeviewFrame(
-            self.bg_tree_container,
-            columns=columns,
-            headings=day_headings,
-            widths=day_widths,
-            height=5
-        )
-        self.bg_tree_frame.pack(fill=ctk.BOTH, expand=True)
-        self.bg_tree = self.bg_tree_frame.tree
-        self.bg_current_view = "weekly"
-
-    def _create_monthly_treeview(self, month_start: datetime):
-        """Create the monthly view treeview with 5-day period columns for projects."""
+    def _update_monthly_columns(self, month_start: datetime):
+        """Update the monthly table column headers with actual date ranges."""
         import calendar
-        from gui import TreeviewFrame
 
-        # Calculate the number of days in the month
         year = month_start.year
         month = month_start.month
         days_in_month = calendar.monthrange(year, month)[1]
 
-        # Build column headers for 5-day periods
-        period_columns = []
-        period_headings = ["Project"]
-        period_widths = [120]
+        period_headings = ["Project", "Priority", "Tags"]
         period_starts = [1, 6, 11, 16, 21, 26]
 
         for i, start_day in enumerate(period_starts):
-            col_id = f"period{i}"
-            period_columns.append(col_id)
             if i < 5:
                 end_day = start_day + 4
                 header = f"{start_day}-{end_day}"
             else:
                 header = f"{start_day}-{days_in_month}"
             period_headings.append(header)
-            period_widths.append(55)
-
-        columns = ["project"] + period_columns + ["total"]
         period_headings.append("Total")
-        period_widths.append(60)
 
-        self.tree_frame = TreeviewFrame(
-            self.tree_container,
-            columns=columns,
-            headings=period_headings,
-            widths=period_widths,
-            height=5
-        )
-        self.tree_frame.pack(fill=ctk.BOTH, expand=True)
-        self.tree = self.tree_frame.tree
-        self.current_view = "monthly"
+        # Update project table headers
+        for i, heading in enumerate(period_headings):
+            self.table_monthly.update_header(i, heading)
 
-    def _create_bg_monthly_treeview(self, month_start: datetime):
-        """Create the monthly view treeview for background tasks."""
-        import calendar
-        from gui import TreeviewFrame
-
-        year = month_start.year
-        month = month_start.month
-        days_in_month = calendar.monthrange(year, month)[1]
-
-        period_columns = []
-        period_headings = ["Task"]
-        period_widths = [120]
-        period_starts = [1, 6, 11, 16, 21, 26]
-
+        # Update bg task table headers (no Priority/Tags columns)
+        bg_headings = ["Task"]
         for i, start_day in enumerate(period_starts):
-            col_id = f"period{i}"
-            period_columns.append(col_id)
             if i < 5:
                 end_day = start_day + 4
                 header = f"{start_day}-{end_day}"
             else:
                 header = f"{start_day}-{days_in_month}"
-            period_headings.append(header)
-            period_widths.append(55)
-
-        columns = ["task"] + period_columns + ["total"]
-        period_headings.append("Total")
-        period_widths.append(60)
-
-        self.bg_tree_frame = TreeviewFrame(
-            self.bg_tree_container,
-            columns=columns,
-            headings=period_headings,
-            widths=period_widths,
-            height=5
-        )
-        self.bg_tree_frame.pack(fill=ctk.BOTH, expand=True)
-        self.bg_tree = self.bg_tree_frame.tree
-        self.bg_current_view = "monthly"
-
-    def _destroy_treeview(self):
-        """Destroy the current project treeview."""
-        if hasattr(self, 'tree_frame'):
-            self.tree_frame.destroy()
-
-    def _destroy_bg_treeview(self):
-        """Destroy the current background task treeview."""
-        if hasattr(self, 'bg_tree_frame'):
-            self.bg_tree_frame.destroy()
+            bg_headings.append(header)
+        bg_headings.append("Total")
+        for i, heading in enumerate(bg_headings):
+            self.bg_table_monthly.update_header(i, heading)
 
     def _format_time_short(self, seconds: int) -> str:
         """Format seconds as short time string (e.g., '1:30' for 1h 30m, '0:45' for 45m)."""
@@ -328,6 +347,11 @@ class SummaryTab:
     def refresh(self):
         """Refresh summary data."""
         import calendar
+
+        # Initialize tables on first refresh (lazy initialization)
+        if not self._tables_initialized:
+            self._initialize_tables()
+
         period = self.period_var.get()
 
         # Calculate date range
@@ -355,28 +379,24 @@ class SummaryTab:
             days_in_month = calendar.monthrange(start_date.year, start_date.month)[1]
             end_date = start_date + timedelta(days=days_in_month)
 
-        # Switch view type if needed
+        # Switch view type if needed (show/hide tables instead of destroy/create)
         if period == "week":
             if self.current_view != "weekly":
-                self._destroy_treeview()
-                self._create_weekly_treeview(start_date)
-            if not hasattr(self, 'bg_current_view') or self.bg_current_view != "weekly":
-                self._destroy_bg_treeview()
-                self._create_bg_weekly_treeview(start_date)
+                self._show_table_view("weekly")
+            if self.bg_current_view != "weekly":
+                self._show_bg_table_view("weekly")
             self._refresh_weekly(start_date, end_date)
         elif period in ("month", "last_month"):
-            self._destroy_treeview()
-            self._create_monthly_treeview(start_date)
-            self._destroy_bg_treeview()
-            self._create_bg_monthly_treeview(start_date)
+            if self.current_view != "monthly":
+                self._show_table_view("monthly")
+            if self.bg_current_view != "monthly":
+                self._show_bg_table_view("monthly")
             self._refresh_monthly(start_date, end_date)
         else:
             if self.current_view != "standard":
-                self._destroy_treeview()
-                self._create_standard_treeview()
-            if not hasattr(self, 'bg_current_view') or self.bg_current_view != "standard":
-                self._destroy_bg_treeview()
-                self._create_bg_standard_treeview()
+                self._show_table_view("standard")
+            if self.bg_current_view != "standard":
+                self._show_bg_table_view("standard")
             self._refresh_standard(start_date, end_date)
 
     def _refresh_standard(self, start_date, end_date):
@@ -384,28 +404,41 @@ class SummaryTab:
         sort_by = self.sort_var.get()
         group_by = self.group_var.get()
 
-        # Clear existing
-        self.tree_frame.clear()
-        self.bg_tree_frame.clear()
+        # Use batch_update to defer painting for both tables
+        with batch_update(self.table_container):
+            with batch_update(self.bg_table_container):
+                self._refresh_standard_inner(start_date, end_date, sort_by, group_by)
 
-        # Configure separator tag (thin divider line)
-        self.tree_frame.configure_tag("separator", background=themes.get_colors()["separator"])
-
-        # Update column headers based on sort mode and group mode
+    def _refresh_standard_inner(self, start_date, end_date, sort_by, group_by):
+        """Inner refresh logic for standard view (called within batch_update)."""
+        # Update column headers and widths based on sort mode and group mode
+        # Use update_columns to rebuild header with correct widths
         if group_by:
-            if sort_by == "tag":
-                self.tree.heading("project", text="Tag")
-            else:
-                self.tree.heading("project", text="Priority")
-            self.tree.heading("priority", text="")
+            # When grouping, collapse the unused Priority/Tags columns (indices 1-2)
+            # First column shows group label, then minimal space, then Time/Hours
+            first_col = "Tag" if sort_by == "tag" else "Priority"
+            self.table_standard.update_columns(
+                columns=[first_col, "", "", "Time", "Hours"],
+                widths=[100, 0, 0, 90, 70],
+                anchors=['w', 'w', 'w', 'w', 'w']
+            )
         else:
-            self.tree.heading("project", text="Project")
-            if sort_by == "tag":
-                self.tree.heading("priority", text="Tag")
-            else:
-                self.tree.heading("priority", text="Priority")
+            self.table_standard.update_columns(
+                columns=["Project", "Priority", "Tags", "Time", "Hours"],
+                widths=[160, 50, 260, 90, 70],
+                anchors=['w', 'w', 'w', 'w', 'w']
+            )
+
+        # Clear background table
+        self.bg_table.clear()
+
+        # Build a map of project_name -> tags for quick lookup
+        all_projects = db.list_projects(is_background=False)
+        project_tags_map = {p.name: p.tags for p in all_projects}
+        project_priority_map = {p.name: p.priority for p in all_projects}
 
         project_total_seconds = 0
+        row_counter = 0
 
         if sort_by == "priority":
             # Get project summary (regular projects only)
@@ -429,20 +462,20 @@ class SummaryTab:
                     time_str = f"{hours}:{mins:02d}:{secs:02d}"
                     hours_decimal = round(seconds / 3600, 2)
 
-                    priority_label = f"{priority} ({PRIORITY_LABELS.get(priority, 'Unknown')})"
+                    priority_label = str(priority)
 
-                    self.tree_frame.insert(values=(priority_label, "", time_str, hours_decimal))
+                    self.table.add_row(f"priority_{priority}", (priority_label, "", "", time_str, hours_decimal))
             else:
-                # Populate project tree with separators between priority groups
+                # Populate project table with separators between priority groups
                 last_priority = None
                 for project_name, data in project_summary.items():
                     seconds = data["seconds"]
                     priority = data["priority"]
                     project_total_seconds += seconds
 
-                    # Add separator row between priority groups
+                    # Add separator between priority groups
                     if last_priority is not None and priority != last_priority:
-                        self.tree_frame.insert(values=("", "", "", ""), tags=("separator",))
+                        self.table.add_divider()
                     last_priority = priority
 
                     hours = seconds // 3600
@@ -451,9 +484,11 @@ class SummaryTab:
                     time_str = f"{hours}:{mins:02d}:{secs:02d}"
                     hours_decimal = round(seconds / 3600, 2)
 
-                    priority_label = f"{priority} ({PRIORITY_LABELS.get(priority, 'Unknown')})"
+                    priority_label = str(priority)
+                    tags_str = ", ".join(project_tags_map.get(project_name, []))
 
-                    self.tree_frame.insert(values=(project_name, priority_label, time_str, hours_decimal))
+                    self.table.add_row(f"project_{row_counter}", (project_name, priority_label, tags_str, time_str, hours_decimal))
+                    row_counter += 1
         else:
             # Tag-based sorting
             if start_date is None:
@@ -480,14 +515,14 @@ class SummaryTab:
                     time_str = f"{hours}:{mins:02d}:{secs:02d}"
                     hours_decimal = round(tag_seconds / 3600, 2)
 
-                    self.tree_frame.insert(values=(tag_name, "", time_str, hours_decimal))
+                    self.table.add_row(f"tag_{tag_name}", (tag_name, "", "", time_str, hours_decimal))
             else:
                 seen_projects = set()
 
                 last_tag = None
                 for tag_name, tag_data in tag_summary.items():
                     if last_tag is not None:
-                        self.tree_frame.insert(values=("", "", "", ""), tags=("separator",))
+                        self.table.add_divider()
                     last_tag = tag_name
 
                     for project_name, pdata in tag_data["projects"].items():
@@ -504,14 +539,19 @@ class SummaryTab:
                         hours_decimal = round(seconds / 3600, 2)
 
                         display_name = project_name + " *" if pdata["has_multiple_tags"] else project_name
+                        priority = project_priority_map.get(project_name, 3)
+                        priority_label = str(priority)
+                        tags_str = ", ".join(project_tags_map.get(project_name, []))
 
-                        self.tree_frame.insert(values=(display_name, tag_name, time_str, hours_decimal))
+                        self.table.add_row(f"project_{row_counter}", (display_name, priority_label, tags_str, time_str, hours_decimal))
+                        row_counter += 1
 
         # Get background task summary
         bg_summary = db.get_summary_with_priority(start_date=start_date, end_date=end_date, is_background=True)
 
-        # Populate background task tree
+        # Populate background task table
         bg_total_seconds = 0
+        bg_row_counter = 0
         for task_name, data in bg_summary.items():
             seconds = data["seconds"]
             bg_total_seconds += seconds
@@ -522,7 +562,8 @@ class SummaryTab:
             time_str = f"{hours}:{mins:02d}:{secs:02d}"
             hours_decimal = round(seconds / 3600, 2)
 
-            self.bg_tree_frame.insert(values=(task_name, time_str, hours_decimal))
+            self.bg_table.add_row(f"task_{bg_row_counter}", (task_name, time_str, hours_decimal))
+            bg_row_counter += 1
 
         # Update totals
         proj_h = project_total_seconds // 3600
@@ -543,28 +584,49 @@ class SummaryTab:
         sort_by = self.sort_var.get()
         group_by = self.group_var.get()
 
-        # Clear existing
-        self.tree_frame.clear()
-        self.bg_tree_frame.clear()
+        # Use batch_update to defer painting for both tables
+        with batch_update(self.table_container):
+            with batch_update(self.bg_table_container):
+                self._refresh_weekly_inner(start_date, end_date, sort_by, group_by)
 
-        # Configure separator and total row tags
-        self.tree_frame.configure_tag("separator", background=themes.get_colors()["separator"])
-        self.tree_frame.configure_tag("total_row", font=(FONT_FAMILY, 10, "bold"))
+    def _refresh_weekly_inner(self, start_date: datetime, end_date: datetime, sort_by, group_by):
+        """Inner refresh logic for weekly view (called within batch_update)."""
+        # Build day headings (will be updated with actual dates below)
+        day_headings_base = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-        # Update column header based on group mode
+        # Update column header and widths based on group mode
         if group_by:
-            if sort_by == "tag":
-                self.tree.heading("project", text="Tag")
-            else:
-                self.tree.heading("project", text="Priority")
+            # When grouping, collapse the unused Priority/Tags columns (indices 1-2)
+            first_col = "Tag" if sort_by == "tag" else "Priority"
+            self.table_weekly.update_columns(
+                columns=[first_col, "", ""] + day_headings_base + ["Total"],
+                widths=[80, 0, 0, 50, 50, 50, 50, 50, 50, 50, 55],
+                anchors=['w'] + ['w'] * 10
+            )
         else:
-            self.tree.heading("project", text="Project")
+            self.table_weekly.update_columns(
+                columns=["Project", "Priority", "Tags"] + day_headings_base + ["Total"],
+                widths=[100, 50, 200, 50, 50, 50, 50, 50, 50, 50, 55],
+                anchors=['w'] + ['w'] * 10
+            )
+
+        # Update column headers with actual dates (after update_columns)
+        self._update_weekly_columns(start_date)
+
+        # Clear background table
+        self.bg_table.clear()
+
+        # Build a map of project_name -> tags for quick lookup
+        all_projects = db.list_projects(is_background=False)
+        project_tags_map = {p.name: p.tags for p in all_projects}
+        project_priority_map = {p.name: p.priority for p in all_projects}
 
         # Build date strings for each day of the week
         day_dates = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
 
         project_total_seconds = 0
         project_daily_totals = [0] * 7
+        row_counter = 0
 
         if sort_by == "priority":
             # Get per-day summary for projects
@@ -593,9 +655,9 @@ class SummaryTab:
                 for priority in sorted(priority_daily_totals.keys()):
                     day_values = [self._format_time_short(s) for s in priority_daily_totals[priority]]
                     total_str = self._format_time_short(priority_totals[priority])
-                    priority_label = f"{priority} ({PRIORITY_LABELS.get(priority, 'Unknown')})"
+                    priority_label = str(priority)
 
-                    self.tree_frame.insert(values=(priority_label, *day_values, total_str))
+                    self.table.add_row(f"priority_{priority}", (priority_label, "", "", *day_values, total_str))
             else:
                 last_priority = None
 
@@ -604,7 +666,7 @@ class SummaryTab:
                     priority = data["priority"]
 
                     if last_priority is not None and priority != last_priority:
-                        self.tree_frame.insert(values=("", "", "", "", "", "", "", "", ""), tags=("separator",))
+                        self.table.add_divider()
                     last_priority = priority
 
                     day_values = []
@@ -614,8 +676,11 @@ class SummaryTab:
                         day_values.append(self._format_time_short(seconds))
 
                     total_str = self._format_time_short(data["total"])
+                    priority_label = str(priority)
+                    tags_str = ", ".join(project_tags_map.get(project_name, []))
 
-                    self.tree_frame.insert(values=(project_name, *day_values, total_str))
+                    self.table.add_row(f"project_{row_counter}", (project_name, priority_label, tags_str, *day_values, total_str))
+                    row_counter += 1
         else:
             # Tag-based sorting
             tag_summary = db.get_summary_by_tag(start_date=start_date, end_date=end_date)
@@ -647,7 +712,7 @@ class SummaryTab:
                     day_values = [self._format_time_short(s) for s in tag_daily_totals]
                     total_str = self._format_time_short(tag_total)
 
-                    self.tree_frame.insert(values=(tag_name, *day_values, total_str))
+                    self.table.add_row(f"tag_{tag_name}", (tag_name, "", "", *day_values, total_str))
             else:
                 seen_projects = set()
                 project_daily_counted = {}
@@ -655,7 +720,7 @@ class SummaryTab:
                 last_tag = None
                 for tag_name, tag_data in tag_summary.items():
                     if last_tag is not None:
-                        self.tree_frame.insert(values=("", "", "", "", "", "", "", "", ""), tags=("separator",))
+                        self.table.add_divider()
                     last_tag = tag_name
 
                     for project_name, pdata in tag_data["projects"].items():
@@ -674,22 +739,26 @@ class SummaryTab:
                             seen_projects.add(project_name)
 
                         total_str = self._format_time_short(pdata["total"])
-
                         display_name = project_name + " *" if pdata["has_multiple_tags"] else project_name
+                        priority = project_priority_map.get(project_name, 3)
+                        priority_label = str(priority)
+                        tags_str = ", ".join(project_tags_map.get(project_name, []))
 
-                        self.tree_frame.insert(values=(display_name, *day_values, total_str))
+                        self.table.add_row(f"project_{row_counter}", (display_name, priority_label, tags_str, *day_values, total_str))
+                        row_counter += 1
 
         # Add project totals row
         project_daily_total_values = [self._format_time_short(s) for s in project_daily_totals]
         project_total_str = self._format_time_short(project_total_seconds)
 
-        self.tree_frame.insert(values=("TOTAL", *project_daily_total_values, project_total_str), tags=("total_row",))
+        self.table.add_row("total_row", ("TOTAL", "", "", *project_daily_total_values, project_total_str), is_total=True)
 
         # Get per-day summary for background tasks
         bg_summary = db.get_summary_by_day(start_date=start_date, end_date=end_date, is_background=True)
 
         bg_total_seconds = 0
         bg_daily_totals = [0] * 7
+        bg_row_counter = 0
 
         for task_name, data in bg_summary.items():
             bg_total_seconds += data["total"]
@@ -702,14 +771,14 @@ class SummaryTab:
 
             total_str = self._format_time_short(data["total"])
 
-            self.bg_tree_frame.insert(values=(task_name, *day_values, total_str))
+            self.bg_table.add_row(f"task_{bg_row_counter}", (task_name, *day_values, total_str))
+            bg_row_counter += 1
 
         # Add background task totals row
         bg_daily_total_values = [self._format_time_short(s) for s in bg_daily_totals]
         bg_total_str = self._format_time_short(bg_total_seconds)
 
-        self.bg_tree_frame.insert(values=("TOTAL", *bg_daily_total_values, bg_total_str), tags=("total_row",))
-        self.bg_tree_frame.configure_tag("total_row", font=(FONT_FAMILY, 10, "bold"))
+        self.bg_table.add_row("bg_total_row", ("TOTAL", *bg_daily_total_values, bg_total_str), is_total=True)
 
         # Update totals
         proj_h = project_total_seconds // 3600
@@ -731,22 +800,44 @@ class SummaryTab:
         sort_by = self.sort_var.get()
         group_by = self.group_var.get()
 
-        # Clear existing
-        self.tree_frame.clear()
-        self.bg_tree_frame.clear()
+        # Use batch_update to defer painting for both tables
+        with batch_update(self.table_container):
+            with batch_update(self.bg_table_container):
+                self._refresh_monthly_inner(start_date, end_date, sort_by, group_by)
 
-        # Configure separator and total row tags
-        self.tree_frame.configure_tag("separator", background=themes.get_colors()["separator"])
-        self.tree_frame.configure_tag("total_row", font=(FONT_FAMILY, 10, "bold"))
+    def _refresh_monthly_inner(self, start_date: datetime, end_date: datetime, sort_by, group_by):
+        """Inner refresh logic for monthly view (called within batch_update)."""
+        import calendar
 
-        # Update column header based on group mode
+        # Build period headings (will be updated with actual date ranges below)
+        period_headings_base = ["1-5", "6-10", "11-15", "16-20", "21-25", "26-31"]
+
+        # Update column header and widths based on group mode
         if group_by:
-            if sort_by == "tag":
-                self.tree.heading("project", text="Tag")
-            else:
-                self.tree.heading("project", text="Priority")
+            # When grouping, collapse the unused Priority/Tags columns (indices 1-2)
+            first_col = "Tag" if sort_by == "tag" else "Priority"
+            self.table_monthly.update_columns(
+                columns=[first_col, "", ""] + period_headings_base + ["Total"],
+                widths=[80, 0, 0, 50, 50, 50, 50, 50, 50, 55],
+                anchors=['w'] + ['w'] * 9
+            )
         else:
-            self.tree.heading("project", text="Project")
+            self.table_monthly.update_columns(
+                columns=["Project", "Priority", "Tags"] + period_headings_base + ["Total"],
+                widths=[100, 50, 200, 50, 50, 50, 50, 50, 50, 55],
+                anchors=['w'] + ['w'] * 9
+            )
+
+        # Update column headers with actual date ranges (after update_columns)
+        self._update_monthly_columns(start_date)
+
+        # Clear background table
+        self.bg_table.clear()
+
+        # Build a map of project_name -> tags for quick lookup
+        all_projects = db.list_projects(is_background=False)
+        project_tags_map = {p.name: p.tags for p in all_projects}
+        project_priority_map = {p.name: p.priority for p in all_projects}
 
         # Calculate period boundaries
         year = start_date.year
@@ -764,6 +855,7 @@ class SummaryTab:
 
         project_total_seconds = 0
         project_period_totals = [0] * 6
+        row_counter = 0
 
         if sort_by == "priority":
             project_summary = db.get_summary_by_day(start_date=start_date, end_date=end_date, is_background=False)
@@ -793,9 +885,9 @@ class SummaryTab:
                 for priority in sorted(priority_period_totals.keys()):
                     period_values = [self._format_time_short(s) for s in priority_period_totals[priority]]
                     total_str = self._format_time_short(priority_totals[priority])
-                    priority_label = f"{priority} ({PRIORITY_LABELS.get(priority, 'Unknown')})"
+                    priority_label = str(priority)
 
-                    self.tree_frame.insert(values=(priority_label, *period_values, total_str))
+                    self.table.add_row(f"priority_{priority}", (priority_label, "", "", *period_values, total_str))
             else:
                 last_priority = None
 
@@ -804,7 +896,7 @@ class SummaryTab:
                     priority = data["priority"]
 
                     if last_priority is not None and priority != last_priority:
-                        self.tree_frame.insert(values=("", "", "", "", "", "", "", ""), tags=("separator",))
+                        self.table.add_divider()
                     last_priority = priority
 
                     period_values = []
@@ -817,8 +909,11 @@ class SummaryTab:
                         period_values.append(self._format_time_short(period_seconds))
 
                     total_str = self._format_time_short(data["total"])
+                    priority_label = str(priority)
+                    tags_str = ", ".join(project_tags_map.get(project_name, []))
 
-                    self.tree_frame.insert(values=(project_name, *period_values, total_str))
+                    self.table.add_row(f"project_{row_counter}", (project_name, priority_label, tags_str, *period_values, total_str))
+                    row_counter += 1
         else:
             tag_summary = db.get_summary_by_tag(start_date=start_date, end_date=end_date)
 
@@ -853,7 +948,7 @@ class SummaryTab:
                     period_values = [self._format_time_short(s) for s in tag_period_totals]
                     total_str = self._format_time_short(tag_total)
 
-                    self.tree_frame.insert(values=(tag_name, *period_values, total_str))
+                    self.table.add_row(f"tag_{tag_name}", (tag_name, "", "", *period_values, total_str))
             else:
                 seen_projects = set()
                 project_period_counted = {}
@@ -861,7 +956,7 @@ class SummaryTab:
                 last_tag = None
                 for tag_name, tag_data in tag_summary.items():
                     if last_tag is not None:
-                        self.tree_frame.insert(values=("", "", "", "", "", "", "", ""), tags=("separator",))
+                        self.table.add_divider()
                     last_tag = tag_name
 
                     for project_name, pdata in tag_data["projects"].items():
@@ -885,22 +980,26 @@ class SummaryTab:
                             seen_projects.add(project_name)
 
                         total_str = self._format_time_short(pdata["total"])
-
                         display_name = project_name + " *" if pdata["has_multiple_tags"] else project_name
+                        priority = project_priority_map.get(project_name, 3)
+                        priority_label = str(priority)
+                        tags_str = ", ".join(project_tags_map.get(project_name, []))
 
-                        self.tree_frame.insert(values=(display_name, *period_values, total_str))
+                        self.table.add_row(f"project_{row_counter}", (display_name, priority_label, tags_str, *period_values, total_str))
+                        row_counter += 1
 
         # Add project totals row
         project_period_total_values = [self._format_time_short(s) for s in project_period_totals]
         project_total_str = self._format_time_short(project_total_seconds)
 
-        self.tree_frame.insert(values=("TOTAL", *project_period_total_values, project_total_str), tags=("total_row",))
+        self.table.add_row("total_row", ("TOTAL", "", "", *project_period_total_values, project_total_str), is_total=True)
 
         # Get per-day summary for background tasks
         bg_summary = db.get_summary_by_day(start_date=start_date, end_date=end_date, is_background=True)
 
         bg_total_seconds = 0
         bg_period_totals = [0] * 6
+        bg_row_counter = 0
 
         for task_name, data in bg_summary.items():
             bg_total_seconds += data["total"]
@@ -916,14 +1015,14 @@ class SummaryTab:
 
             total_str = self._format_time_short(data["total"])
 
-            self.bg_tree_frame.insert(values=(task_name, *period_values, total_str))
+            self.bg_table.add_row(f"task_{bg_row_counter}", (task_name, *period_values, total_str))
+            bg_row_counter += 1
 
         # Add background task totals row
         bg_period_total_values = [self._format_time_short(s) for s in bg_period_totals]
         bg_total_str = self._format_time_short(bg_total_seconds)
 
-        self.bg_tree_frame.insert(values=("TOTAL", *bg_period_total_values, bg_total_str), tags=("total_row",))
-        self.bg_tree_frame.configure_tag("total_row", font=(FONT_FAMILY, 10, "bold"))
+        self.bg_table.add_row("bg_total_row", ("TOTAL", *bg_period_total_values, bg_total_str), is_total=True)
 
         # Update totals
         proj_h = project_total_seconds // 3600

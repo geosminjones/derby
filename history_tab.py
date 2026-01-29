@@ -11,6 +11,7 @@ import customtkinter as ctk
 import db
 import themes
 from dialogs import CTkMessagebox, CTkConfirmDialog
+from gui_utils import batch_update
 
 if TYPE_CHECKING:
     from gui import DerbyApp, TreeviewFrame
@@ -98,9 +99,6 @@ class HistoryTab:
         project_names = ["All"] + [p.name for p in projects]
         self.project_combo.configure(values=project_names)
 
-        # Clear existing
-        self.tree_frame.clear()
-
         # Calculate date filters
         start_date = None
         end_date = None
@@ -134,14 +132,19 @@ class HistoryTab:
             limit=limit
         )
 
-        # Populate tree
-        for session in sessions:
-            date_str = session.start_time.strftime("%Y-%m-%d") if session.start_time else ""
-            notes_preview = session.notes[:50] + "..." if len(session.notes) > 50 else session.notes
-            self.tree_frame.insert(
-                values=(session.id, date_str, session.project_name, session.format_duration(), notes_preview),
-                iid=str(session.id)
-            )
+        # Use batch_update to defer painting during clear and repopulate
+        with batch_update(self.tree_frame):
+            # Clear existing
+            self.tree_frame.clear()
+
+            # Populate tree
+            for session in sessions:
+                date_str = session.start_time.strftime("%Y-%m-%d") if session.start_time else ""
+                notes_preview = session.notes[:50] + "..." if len(session.notes) > 50 else session.notes
+                self.tree_frame.insert(
+                    values=(session.id, date_str, session.project_name, session.format_duration(), notes_preview),
+                    iid=str(session.id)
+                )
 
     def delete_selected(self):
         """Delete the selected session."""

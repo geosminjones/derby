@@ -15,6 +15,7 @@ import customtkinter as ctk
 import db
 import themes
 from themes import FONT_FAMILY
+from gui_utils import batch_update
 
 # Import tab components
 from timer_tab import TimerTab, LogSessionDialog
@@ -125,14 +126,19 @@ class DerbyApp:
         self.content_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         self.content_frame.pack(fill=ctk.BOTH, expand=True)
 
-        # Create individual tab frames (all hidden initially except Timer)
+        # Configure grid to allow tab frames to fill the space
+        self.content_frame.grid_rowconfigure(0, weight=1)
+        self.content_frame.grid_columnconfigure(0, weight=1)
+
+        # Create individual tab frames (all stacked in same grid cell)
         self.tab_frames = {}
         for tab_name in ["Timer", "History", "Summary", "Projects", "Appearance"]:
             frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+            frame.grid(row=0, column=0, sticky="nsew")
             self.tab_frames[tab_name] = frame
 
-        # Show Timer tab by default
-        self.tab_frames["Timer"].pack(fill=ctk.BOTH, expand=True)
+        # Raise Timer tab to top by default
+        self.tab_frames["Timer"].tkraise()
         self.current_tab = "Timer"
 
         # Create tab content
@@ -187,25 +193,24 @@ class DerbyApp:
         if tab_name is None:
             tab_name = self.tab_var.get()
 
-        # Hide current tab
-        if hasattr(self, 'current_tab') and self.current_tab in self.tab_frames:
-            self.tab_frames[self.current_tab].pack_forget()
+        # Wrap the entire tab switch in batch_update to prevent flicker
+        # This hides the content frame while switching and refreshing
+        with batch_update(self.content_frame):
+            # Raise the selected tab to the front
+            self.tab_frames[tab_name].tkraise()
+            self.current_tab = tab_name
 
-        # Show new tab
-        self.tab_frames[tab_name].pack(fill=ctk.BOTH, expand=True)
-        self.current_tab = tab_name
-
-        # Refresh the tab data
-        if tab_name == "Timer":
-            self.timer_tab.refresh()
-        elif tab_name == "History":
-            self.history_tab.refresh()
-        elif tab_name == "Summary":
-            self.summary_tab.refresh()
-        elif tab_name == "Projects":
-            self.projects_tab.refresh()
-        elif tab_name == "Appearance":
-            self.appearance_tab.refresh()
+            # Refresh the tab data
+            if tab_name == "Timer":
+                self.timer_tab.refresh()
+            elif tab_name == "History":
+                self.history_tab.refresh()
+            elif tab_name == "Summary":
+                self.summary_tab.refresh()
+            elif tab_name == "Projects":
+                self.projects_tab.refresh()
+            elif tab_name == "Appearance":
+                self.appearance_tab.refresh()
 
     def _export_csv(self):
         """Export sessions to CSV file."""
@@ -374,8 +379,9 @@ class TreeviewFrame(ctk.CTkFrame):
 
     def clear(self):
         """Clear all items from the treeview."""
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        children = self.tree.get_children()
+        if children:
+            self.tree.delete(*children)
 
     def insert(self, values, iid=None, tags=None):
         """Insert a row into the treeview."""

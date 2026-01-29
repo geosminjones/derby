@@ -12,6 +12,7 @@ import db
 import themes
 from themes import FONT_FAMILY
 from dialogs import CTkMessagebox
+from gui_utils import batch_update
 
 if TYPE_CHECKING:
     from gui import DerbyApp, TreeviewFrame
@@ -117,27 +118,30 @@ class ProjectsTab:
 
     def refresh(self):
         """Refresh both projects and background tasks lists."""
-        # Clear existing
-        self.tree_frame.clear()
-        self.bg_tree_frame.clear()
-
-        # Get regular projects
+        # Get data first, then batch update UI
         projects = db.list_projects(is_background=False)
-
-        for project in projects:
-            priority_label = f"{project.priority} ({PRIORITY_LABELS.get(project.priority, 'Unknown')})"
-            tags_str = ", ".join(project.tags) if project.tags else ""
-
-            self.tree_frame.insert(
-                values=(project.name, priority_label, tags_str),
-                iid=project.name
-            )
-
-        # Get background tasks
         bg_tasks = db.list_projects(is_background=True)
 
-        for task in bg_tasks:
-            self.bg_tree_frame.insert(values=(task.name,), iid=task.name)
+        # Use batch_update to defer painting during clear and repopulate
+        with batch_update(self.tree_frame):
+            with batch_update(self.bg_tree_frame):
+                # Clear existing
+                self.tree_frame.clear()
+                self.bg_tree_frame.clear()
+
+                # Populate regular projects
+                for project in projects:
+                    priority_label = f"{project.priority} ({PRIORITY_LABELS.get(project.priority, 'Unknown')})"
+                    tags_str = ", ".join(project.tags) if project.tags else ""
+
+                    self.tree_frame.insert(
+                        values=(project.name, priority_label, tags_str),
+                        iid=project.name
+                    )
+
+                # Populate background tasks
+                for task in bg_tasks:
+                    self.bg_tree_frame.insert(values=(task.name,), iid=task.name)
 
     def add_project(self):
         """Show dialog to add a new project."""

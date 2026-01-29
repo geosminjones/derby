@@ -13,9 +13,11 @@ import themes
 from themes import FONT_FAMILY
 from models import parse_duration_string
 from dialogs import CTkMessagebox
+from ctk_table import CTkSessionList
+from gui_utils import batch_update
 
 if TYPE_CHECKING:
-    from gui import DerbyApp, TreeviewFrame
+    from gui import DerbyApp
 
 
 class TimerTab:
@@ -31,8 +33,7 @@ class TimerTab:
 
     def _build_ui(self):
         """Build the timer tab UI with split view for projects and background tasks."""
-        # Runtime import to avoid circular dependency
-        from gui import TreeviewFrame
+        colors = themes.get_colors()
 
         # Main container
         main_frame = ctk.CTkFrame(self.frame, fg_color="transparent")
@@ -41,90 +42,142 @@ class TimerTab:
         # =====================================================================
         # TOP HALF: Regular Projects
         # =====================================================================
-        top_frame = ctk.CTkFrame(main_frame, fg_color=themes.get_colors()["container_bg"])
+        top_frame = ctk.CTkFrame(main_frame, fg_color=colors["container_bg"], corner_radius=10)
         top_frame.pack(fill=ctk.BOTH, expand=True, pady=(0, 5))
 
         # Start session section for regular projects
-        start_frame = ctk.CTkFrame(top_frame, fg_color=themes.get_colors()["card_bg"])
+        start_frame = ctk.CTkFrame(top_frame, fg_color=colors["card_bg"], corner_radius=8)
         start_frame.pack(fill=ctk.X, padx=10, pady=10)
 
-        ctk.CTkLabel(start_frame, text="Start New Project Session", font=ctk.CTkFont(family=FONT_FAMILY, weight="bold")).pack(anchor="w")
+        start_inner = ctk.CTkFrame(start_frame, fg_color="transparent")
+        start_inner.pack(fill=ctk.X, padx=12, pady=10)
 
-        project_row = ctk.CTkFrame(start_frame, fg_color="transparent")
-        project_row.pack(fill=ctk.X, pady=5)
+        ctk.CTkLabel(
+            start_inner,
+            text="Start New Project Session",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
+            text_color=colors["text_primary"]
+        ).pack(anchor="w")
 
-        ctk.CTkLabel(project_row, text="Project:").pack(side=ctk.LEFT)
+        project_row = ctk.CTkFrame(start_inner, fg_color="transparent")
+        project_row.pack(fill=ctk.X, pady=(8, 0))
+
+        ctk.CTkLabel(
+            project_row,
+            text="Project:",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            text_color=colors["text_secondary"]
+        ).pack(side=ctk.LEFT)
 
         self.project_combo = ctk.CTkComboBox(
             project_row,
             variable=self.project_var,
-            width=250
+            width=250,
+            height=32,
+            corner_radius=6,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
         )
         self.project_combo.pack(side=ctk.LEFT, padx=10)
 
-        start_btn = ctk.CTkButton(project_row, text="Start Tracking", command=self.start_session)
+        start_btn = ctk.CTkButton(
+            project_row,
+            text="Start Tracking",
+            command=self.start_session,
+            height=32,
+            corner_radius=6,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
+        )
         start_btn.pack(side=ctk.LEFT, padx=5)
 
-        # Active regular sessions section
-        ctk.CTkLabel(top_frame, text="Active Project Sessions", font=ctk.CTkFont(family=FONT_FAMILY, weight="bold")).pack(anchor="w", padx=10)
+        # Active regular sessions section header
+        sessions_header = ctk.CTkFrame(top_frame, fg_color="transparent")
+        sessions_header.pack(fill=ctk.X, padx=10, pady=(5, 0))
 
-        self.tree_frame = TreeviewFrame(
+        ctk.CTkLabel(
+            sessions_header,
+            text="Active Project Sessions",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
+            text_color=colors["text_primary"]
+        ).pack(anchor="w")
+
+        # Active sessions list using CTkSessionList
+        self.session_list = CTkSessionList(
             top_frame,
-            columns=("project", "started", "duration", "actions"),
-            headings=["Project", "Started", "Duration", "Actions"],
-            widths=[160, 140, 90, 120],
-            height=4,
-            anchors=['w', 'w', 'w', 'center']
+            on_stop=self._on_stop_session,
+            on_toggle_pause=self._on_toggle_pause,
+            empty_message="No active project sessions"
         )
-        self.tree_frame.pack(fill=ctk.BOTH, expand=True, padx=10, pady=5)
-        self.tree = self.tree_frame.tree
-
-        # Bind click event for action buttons
-        self.tree.bind("<Button-1>", self._on_tree_click)
+        self.session_list.pack(fill=ctk.BOTH, expand=True, padx=10, pady=(5, 10))
 
         # =====================================================================
         # BOTTOM HALF: Background Tasks
         # =====================================================================
-        bottom_frame = ctk.CTkFrame(main_frame, fg_color=themes.get_colors()["container_bg"])
+        bottom_frame = ctk.CTkFrame(main_frame, fg_color=colors["container_bg"], corner_radius=10)
         bottom_frame.pack(fill=ctk.BOTH, expand=True, pady=(5, 0))
 
         # Start session section for background tasks
-        bg_start_frame = ctk.CTkFrame(bottom_frame, fg_color=themes.get_colors()["card_bg"])
+        bg_start_frame = ctk.CTkFrame(bottom_frame, fg_color=colors["card_bg"], corner_radius=8)
         bg_start_frame.pack(fill=ctk.X, padx=10, pady=10)
 
-        ctk.CTkLabel(bg_start_frame, text="Start Background Task", font=ctk.CTkFont(family=FONT_FAMILY, weight="bold")).pack(anchor="w")
+        bg_start_inner = ctk.CTkFrame(bg_start_frame, fg_color="transparent")
+        bg_start_inner.pack(fill=ctk.X, padx=12, pady=10)
 
-        bg_row = ctk.CTkFrame(bg_start_frame, fg_color="transparent")
-        bg_row.pack(fill=ctk.X, pady=5)
+        ctk.CTkLabel(
+            bg_start_inner,
+            text="Start Background Task",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
+            text_color=colors["text_primary"]
+        ).pack(anchor="w")
 
-        ctk.CTkLabel(bg_row, text="Task:").pack(side=ctk.LEFT)
+        bg_row = ctk.CTkFrame(bg_start_inner, fg_color="transparent")
+        bg_row.pack(fill=ctk.X, pady=(8, 0))
+
+        ctk.CTkLabel(
+            bg_row,
+            text="Task:",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            text_color=colors["text_secondary"]
+        ).pack(side=ctk.LEFT)
 
         self.bg_task_combo = ctk.CTkComboBox(
             bg_row,
             variable=self.bg_task_var,
-            width=250
+            width=250,
+            height=32,
+            corner_radius=6,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
         )
         self.bg_task_combo.pack(side=ctk.LEFT, padx=10)
 
-        bg_start_btn = ctk.CTkButton(bg_row, text="Start Task", command=self.start_background_task)
+        bg_start_btn = ctk.CTkButton(
+            bg_row,
+            text="Start Task",
+            command=self.start_background_task,
+            height=32,
+            corner_radius=6,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
+        )
         bg_start_btn.pack(side=ctk.LEFT, padx=5)
 
-        # Active background tasks section
-        ctk.CTkLabel(bottom_frame, text="Active Background Tasks", font=ctk.CTkFont(family=FONT_FAMILY, weight="bold")).pack(anchor="w", padx=10)
+        # Active background tasks section header
+        bg_sessions_header = ctk.CTkFrame(bottom_frame, fg_color="transparent")
+        bg_sessions_header.pack(fill=ctk.X, padx=10, pady=(5, 0))
 
-        self.bg_tree_frame = TreeviewFrame(
+        ctk.CTkLabel(
+            bg_sessions_header,
+            text="Active Background Tasks",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
+            text_color=colors["text_primary"]
+        ).pack(anchor="w")
+
+        # Active background tasks list using CTkSessionList
+        self.bg_session_list = CTkSessionList(
             bottom_frame,
-            columns=("project", "started", "duration", "actions"),
-            headings=["Task", "Started", "Duration", "Actions"],
-            widths=[160, 140, 90, 120],
-            height=4,
-            anchors=['w', 'w', 'w', 'center']
+            on_stop=self._on_stop_session,
+            on_toggle_pause=self._on_toggle_pause,
+            empty_message="No active background tasks"
         )
-        self.bg_tree_frame.pack(fill=ctk.BOTH, expand=True, padx=10, pady=5)
-        self.bg_tree = self.bg_tree_frame.tree
-
-        # Bind click event for action buttons
-        self.bg_tree.bind("<Button-1>", self._on_bg_tree_click)
+        self.bg_session_list.pack(fill=ctk.BOTH, expand=True, padx=10, pady=(5, 10))
 
     def refresh(self):
         """Refresh project list and active sessions."""
@@ -142,65 +195,65 @@ class TimerTab:
         self._refresh_active_sessions()
 
     def _refresh_active_sessions(self):
-        """Refresh both active sessions treeviews."""
-        # Clear existing from both trees
-        self.tree_frame.clear()
-        self.bg_tree_frame.clear()
-
-        # Get all active sessions
+        """Refresh both active sessions lists."""
+        # Get all active sessions and project info first
         active = db.get_active_sessions()
 
-        # Separate into regular and background
+        # Prepare session data with project info
+        regular_sessions = []
+        bg_sessions = []
+
         for session in active:
             project = db.get_project(session.project_name)
             is_bg = project.is_background if project else False
 
             started = session.start_time.strftime("%Y-%m-%d %I:%M:%S %p") if session.start_time else ""
-
-            # Build action text based on pause state
-            # Using text labels for clearer clickable areas
-            if session.is_paused:
-                action_text = "[Stop] [Play]"  # Stop and Play available when paused
-            else:
-                action_text = "[Stop] [Pause]"  # Stop and Pause available when playing
+            session_data = {
+                'session_id': str(session.id),
+                'project_name': session.project_name,
+                'started': started,
+                'duration': session.format_duration(),
+                'is_paused': session.is_paused
+            }
 
             if is_bg:
-                self.bg_tree_frame.insert(
-                    values=(session.project_name, started, session.format_duration(), action_text),
-                    iid=str(session.id)
-                )
+                bg_sessions.append(session_data)
             else:
-                self.tree_frame.insert(
-                    values=(session.project_name, started, session.format_duration(), action_text),
-                    iid=str(session.id)
-                )
+                regular_sessions.append(session_data)
+
+        # Use batch_update to defer painting during clear and repopulate
+        with batch_update(self.session_list):
+            with batch_update(self.bg_session_list):
+                # Clear existing from both lists
+                self.session_list.clear()
+                self.bg_session_list.clear()
+
+                # Add regular sessions
+                for data in regular_sessions:
+                    self.session_list.add_session(**data)
+
+                # Add background sessions
+                for data in bg_sessions:
+                    self.bg_session_list.add_session(**data)
 
     def update_durations(self):
-        """Update displayed durations and action buttons for active sessions."""
+        """Update displayed durations and pause states for active sessions."""
         active = db.get_active_sessions()
         active_dict = {str(s.id): s for s in active}
 
-        # Update regular sessions tree
-        for item in self.tree_frame.get_children():
-            if item in active_dict:
-                session = active_dict[item]
-                self.tree_frame.set(item, "duration", session.format_duration())
-                # Update action buttons based on pause state
-                if session.is_paused:
-                    self.tree_frame.set(item, "actions", "[Stop] [Play]")
-                else:
-                    self.tree_frame.set(item, "actions", "[Stop] [Pause]")
+        # Update regular sessions
+        for session_id in self.session_list.get_children():
+            if session_id in active_dict:
+                session = active_dict[session_id]
+                self.session_list.update_duration(session_id, session.format_duration())
+                self.session_list.update_pause_state(session_id, session.is_paused)
 
-        # Update background tasks tree
-        for item in self.bg_tree_frame.get_children():
-            if item in active_dict:
-                session = active_dict[item]
-                self.bg_tree_frame.set(item, "duration", session.format_duration())
-                # Update action buttons based on pause state
-                if session.is_paused:
-                    self.bg_tree_frame.set(item, "actions", "[Stop] [Play]")
-                else:
-                    self.bg_tree_frame.set(item, "actions", "[Stop] [Pause]")
+        # Update background tasks
+        for session_id in self.bg_session_list.get_children():
+            if session_id in active_dict:
+                session = active_dict[session_id]
+                self.bg_session_list.update_duration(session_id, session.format_duration())
+                self.bg_session_list.update_pause_state(session_id, session.is_paused)
 
     def start_session(self):
         """Start tracking the selected regular project."""
@@ -250,79 +303,27 @@ class TimerTab:
         self.bg_task_var.set("")
         self.refresh()
 
-    def _on_tree_click(self, event):
-        """Handle clicks on the regular projects treeview for action buttons."""
-        self._handle_action_click(event, self.tree, is_background=False)
-
-    def _on_bg_tree_click(self, event):
-        """Handle clicks on the background tasks treeview for action buttons."""
-        self._handle_action_click(event, self.bg_tree, is_background=True)
-
-    def _handle_action_click(self, event, tree, is_background: bool):
-        """Handle action button clicks in treeview."""
-        # Identify the row and column clicked
-        region = tree.identify_region(event.x, event.y)
-        if region != "cell":
-            return
-
-        column = tree.identify_column(event.x)
-        item = tree.identify_row(event.y)
-
-        if not item:
-            return
-
-        # Check if Actions column was clicked (column #4)
-        if column != "#4":
-            return
-
-        # Get session ID from the item
-        session_id = int(item)
-
-        # Get the action text to determine current state
-        # Format: "[Stop] [Play]" or "[Stop] [Pause]"
-        action_text = tree.set(item, "actions")
-
-        # Get column bbox to calculate relative position
-        bbox = tree.bbox(item, column)
-        if not bbox:
-            # If bbox is not available, default to pause/play toggle
-            self._toggle_pause_action(session_id)
-            return
-
-        # bbox returns (x, y, width, height)
-        cell_x, _, cell_width, _ = bbox
-        relative_x = event.x - cell_x
-
-        # The action text is "[Stop] [Play]" or "[Stop] [Pause]"
-        # [Stop] takes roughly first half, [Play]/[Pause] takes second half
-        if relative_x < cell_width * 0.5:
-            # Stop action (left side)
-            self._stop_session_action(session_id)
-        else:
-            # Pause or Play action (right side)
-            self._toggle_pause_action(session_id)
-
-    def _stop_session_action(self, session_id: int):
-        """Stop the session with the given ID."""
-        # Get the session to find project name
+    def _on_stop_session(self, session_id: str):
+        """Handle stop button click from session card."""
+        session_id_int = int(session_id)
         active = db.get_active_sessions()
-        session = next((s for s in active if s.id == session_id), None)
+        session = next((s for s in active if s.id == session_id_int), None)
         if session:
             db.stop_session(project_name=session.project_name)
             self.refresh()
 
-    def _toggle_pause_action(self, session_id: int):
-        """Toggle pause state for the session."""
-        # Get current session state
+    def _on_toggle_pause(self, session_id: str):
+        """Handle pause/resume button click from session card."""
+        session_id_int = int(session_id)
         active = db.get_active_sessions()
-        session = next((s for s in active if s.id == session_id), None)
+        session = next((s for s in active if s.id == session_id_int), None)
         if not session:
             return
 
         if session.is_paused:
-            db.resume_session(session_id)
+            db.resume_session(session_id_int)
         else:
-            db.pause_session(session_id)
+            db.pause_session(session_id_int)
 
         self.refresh()
 
