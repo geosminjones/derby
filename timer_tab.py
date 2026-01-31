@@ -18,6 +18,7 @@ from gui_utils import batch_update
 
 if TYPE_CHECKING:
     from gui import DerbyApp
+    from models import Project
 
 
 class TimerTab:
@@ -28,6 +29,12 @@ class TimerTab:
         self.app = app
         self.project_var = ctk.StringVar()
         self.bg_task_var = ctk.StringVar()
+
+        # Caches for optimization
+        self._projects_cache: dict[str, 'Project'] | None = None
+        self._last_session_ids: set[str] = set()
+        self._last_session_state: dict[str, tuple[str, bool]] = {}  # id -> (duration, is_paused)
+
         self._build_ui()
         self.refresh()
 
@@ -35,14 +42,14 @@ class TimerTab:
         """Build the timer tab UI with split view for projects and background tasks."""
         colors = themes.get_colors()
 
-        # Main container
-        main_frame = ctk.CTkFrame(self.frame, fg_color="transparent")
-        main_frame.pack(fill=ctk.BOTH, expand=True, padx=5, pady=5)
+        # Main container (stored for batch_update during refreshes)
+        self.main_frame = ctk.CTkFrame(self.frame, fg_color="transparent")
+        self.main_frame.pack(fill=ctk.BOTH, expand=True, padx=5, pady=5)
 
         # =====================================================================
         # TOP HALF: Regular Projects
         # =====================================================================
-        top_frame = ctk.CTkFrame(main_frame, fg_color=colors["container_bg"], corner_radius=10)
+        top_frame = ctk.CTkFrame(self.main_frame, fg_color=colors["container_bg"], corner_radius=10)
         top_frame.pack(fill=ctk.BOTH, expand=True, pady=(0, 5))
 
         # Start session section for regular projects
@@ -112,7 +119,7 @@ class TimerTab:
         # =====================================================================
         # BOTTOM HALF: Background Tasks
         # =====================================================================
-        bottom_frame = ctk.CTkFrame(main_frame, fg_color=colors["container_bg"], corner_radius=10)
+        bottom_frame = ctk.CTkFrame(self.main_frame, fg_color=colors["container_bg"], corner_radius=10)
         bottom_frame.pack(fill=ctk.BOTH, expand=True, pady=(5, 0))
 
         # Start session section for background tasks
@@ -179,32 +186,69 @@ class TimerTab:
         )
         self.bg_session_list.pack(fill=ctk.BOTH, expand=True, padx=10, pady=(5, 10))
 
-    def refresh(self):
-        """Refresh project list and active sessions."""
-        # Update project combo (regular projects only)
-        projects = db.list_projects(is_background=False)
-        project_names = [p.name for p in projects]
-        self.project_combo.configure(values=project_names)
+    # -------------------------------------------------------------------------
+    # Cache management
+    # -------------------------------------------------------------------------
 
-        # Update background task combo
-        bg_tasks = db.list_projects(is_background=True)
-        bg_task_names = [p.name for p in bg_tasks]
+    def _get_projects_map(self) -> dict[str, 'Project']:
+        """Get cached project map, refreshing if invalidated."""
+        if self._projects_cache is None:
+            all_projects = db.list_projects()
+            self._projects_cache = {p.name: p for p in all_projects}
+        return self._projects_cache
+
+    def _invalidate_caches(self):
+        """Invalidate all caches - call when data may have changed externally."""
+        self._projects_cache = None
+        self._last_session_ids.clear()
+        self._last_session_state.clear()
+
+    # -------------------------------------------------------------------------
+    # Refresh methods (split for targeted updates)
+    # -------------------------------------------------------------------------
+
+    def refresh(self):
+        """Full refresh - project lists and active sessions."""
+        self._invalidate_caches()
+        self.refresh_combos()
+        self.refresh_sessions()
+
+    def refresh_combos(self):
+        """Refresh only the combo box values (when projects change)."""
+        project_map = self._get_projects_map()
+
+        # Extract and sort project names by type
+        project_names = sorted(
+            [p.name for p in project_map.values() if not p.is_background],
+            key=str.lower
+        )
+        bg_task_names = sorted(
+            [p.name for p in project_map.values() if p.is_background],
+            key=str.lower
+        )
+
+        self.project_combo.configure(values=project_names)
         self.bg_task_combo.configure(values=bg_task_names)
 
-        # Update active sessions
+    def refresh_sessions(self):
+        """Refresh only the active sessions lists."""
         self._refresh_active_sessions()
+        # Clear timer state cache so update_durations rebuilds properly
+        self._last_session_ids.clear()
+        self._last_session_state.clear()
 
     def _refresh_active_sessions(self):
-        """Refresh both active sessions lists."""
-        # Get all active sessions and project info first
+        """Refresh both active sessions lists using cached project data."""
         active = db.get_active_sessions()
 
-        # Prepare session data with project info
+        # Use cached project map for O(1) lookups instead of N queries
+        project_map = self._get_projects_map()
+
         regular_sessions = []
         bg_sessions = []
 
         for session in active:
-            project = db.get_project(session.project_name)
+            project = project_map.get(session.project_name)
             is_bg = project.is_background if project else False
 
             started = session.start_time.strftime("%Y-%m-%d %I:%M:%S %p") if session.start_time else ""
@@ -221,103 +265,141 @@ class TimerTab:
             else:
                 regular_sessions.append(session_data)
 
-        # Use batch_update to defer painting during clear and repopulate
-        with batch_update(self.session_list):
-            with batch_update(self.bg_session_list):
-                # Clear existing from both lists
-                self.session_list.clear()
-                self.bg_session_list.clear()
+        # Use batch_update to freeze entire main frame during clear and repopulate
+        with batch_update(self.main_frame):
+            with batch_update(self.session_list):
+                with batch_update(self.bg_session_list):
+                    self.session_list.clear()
+                    self.bg_session_list.clear()
 
-                # Add regular sessions
-                for data in regular_sessions:
-                    self.session_list.add_session(**data)
+                    for data in regular_sessions:
+                        self.session_list.add_session(**data)
 
-                # Add background sessions
-                for data in bg_sessions:
-                    self.bg_session_list.add_session(**data)
+                    for data in bg_sessions:
+                        self.bg_session_list.add_session(**data)
+
+    # -------------------------------------------------------------------------
+    # Timer update (called every 1 second)
+    # -------------------------------------------------------------------------
 
     def update_durations(self):
         """Update displayed durations and pause states for active sessions."""
         active = db.get_active_sessions()
-        active_dict = {str(s.id): s for s in active}
+        current_ids = {str(s.id) for s in active}
 
-        # Update regular sessions
-        for session_id in self.session_list.get_children():
-            if session_id in active_dict:
-                session = active_dict[session_id]
-                self.session_list.update_duration(session_id, session.format_duration())
-                self.session_list.update_pause_state(session_id, session.is_paused)
+        # Detect if session list changed (start/stop occurred externally)
+        if current_ids != self._last_session_ids:
+            # Session added or removed - do a targeted refresh
+            self._refresh_active_sessions()
+            self._last_session_ids = current_ids
+            self._last_session_state.clear()
+            # Rebuild state cache for the new sessions
+            for session in active:
+                session_id = str(session.id)
+                self._last_session_state[session_id] = (
+                    session.format_duration(),
+                    session.is_paused
+                )
+            return
 
-        # Update background tasks
-        for session_id in self.bg_session_list.get_children():
-            if session_id in active_dict:
-                session = active_dict[session_id]
-                self.bg_session_list.update_duration(session_id, session.format_duration())
-                self.bg_session_list.update_pause_state(session_id, session.is_paused)
+        # Session list unchanged - do incremental updates
+        for session in active:
+            session_id = str(session.id)
+            duration = session.format_duration()
+            is_paused = session.is_paused
+
+            # Only update UI if state actually changed
+            cached = self._last_session_state.get(session_id)
+            if cached != (duration, is_paused):
+                # Update in both lists (session is only in one, but checks are fast)
+                self.session_list.update_duration(session_id, duration)
+                self.session_list.update_pause_state(session_id, is_paused)
+                self.bg_session_list.update_duration(session_id, duration)
+                self.bg_session_list.update_pause_state(session_id, is_paused)
+                self._last_session_state[session_id] = (duration, is_paused)
 
     def start_session(self):
         """Start tracking the selected regular project."""
-        project = self.project_var.get().strip()
-        if not project:
+        project_name = self.project_var.get().strip()
+        if not project_name:
             CTkMessagebox(self.app.root, "Warning", "Please enter a project name", "warning")
             return
 
         # Check if already active
-        active = db.get_active_session_by_project(project)
+        active = db.get_active_session_by_project(project_name)
         if active:
-            CTkMessagebox(self.app.root, "Info", f"'{project}' is already being tracked", "info")
+            CTkMessagebox(self.app.root, "Info", f"'{project_name}' is already being tracked", "info")
             return
 
-        # Ensure project exists and is not a background task
-        existing = db.get_project(project)
+        # Use cached project map to check project type
+        project_map = self._get_projects_map()
+        existing = project_map.get(project_name)
         if existing and existing.is_background:
-            CTkMessagebox(self.app.root, "Warning", f"'{project}' is a background task, not a project", "warning")
+            CTkMessagebox(self.app.root, "Warning", f"'{project_name}' is a background task, not a project", "warning")
             return
 
-        db.start_session(project)
+        # Track if this is a new project (for cache invalidation)
+        is_new_project = existing is None
+
+        db.start_session(project_name)
         self.project_var.set("")
-        self.refresh()
+
+        if is_new_project:
+            # New project created - full refresh to update combos
+            self.refresh()
+        else:
+            # Existing project - only refresh sessions
+            self.refresh_sessions()
 
     def start_background_task(self):
         """Start tracking a background task."""
-        task = self.bg_task_var.get().strip()
-        if not task:
+        task_name = self.bg_task_var.get().strip()
+        if not task_name:
             CTkMessagebox(self.app.root, "Warning", "Please enter a task name", "warning")
             return
 
         # Check if already active
-        active = db.get_active_session_by_project(task)
+        active = db.get_active_session_by_project(task_name)
         if active:
-            CTkMessagebox(self.app.root, "Info", f"'{task}' is already being tracked", "info")
+            CTkMessagebox(self.app.root, "Info", f"'{task_name}' is already being tracked", "info")
             return
 
-        # Create as background task if new
-        existing = db.get_project(task)
+        # Use cached project map to check project type
+        project_map = self._get_projects_map()
+        existing = project_map.get(task_name)
+
         if existing is None:
-            db.create_project(task, is_background=True)
+            # New background task - create it
+            db.create_project(task_name, is_background=True)
+            is_new_task = True
         elif not existing.is_background:
-            CTkMessagebox(self.app.root, "Warning", f"'{task}' is a regular project, not a background task", "warning")
+            CTkMessagebox(self.app.root, "Warning", f"'{task_name}' is a regular project, not a background task", "warning")
             return
+        else:
+            is_new_task = False
 
-        db.start_session(task)
+        db.start_session(task_name)
         self.bg_task_var.set("")
-        self.refresh()
+
+        if is_new_task:
+            # New task created - full refresh to update combos
+            self.refresh()
+        else:
+            # Existing task - only refresh sessions
+            self.refresh_sessions()
 
     def _on_stop_session(self, session_id: str):
         """Handle stop button click from session card."""
-        session_id_int = int(session_id)
-        active = db.get_active_sessions()
-        session = next((s for s in active if s.id == session_id_int), None)
-        if session:
+        session = db.get_session_by_id(int(session_id))
+        if session and session.end_time is None:
             db.stop_session(project_name=session.project_name)
-            self.refresh()
+            self.refresh_sessions()  # Only sessions changed, not projects
 
     def _on_toggle_pause(self, session_id: str):
         """Handle pause/resume button click from session card."""
         session_id_int = int(session_id)
-        active = db.get_active_sessions()
-        session = next((s for s in active if s.id == session_id_int), None)
-        if not session:
+        session = db.get_session_by_id(session_id_int)
+        if not session or session.end_time is not None:
             return
 
         if session.is_paused:
@@ -325,7 +407,7 @@ class TimerTab:
         else:
             db.pause_session(session_id_int)
 
-        self.refresh()
+        self.refresh_sessions()  # Only sessions changed, not projects
 
     def stop_all(self):
         """Stop all active sessions (both projects and background tasks)."""

@@ -42,6 +42,10 @@ class Theme:
     danger_hover: str      # Hover state for danger buttons
     success: str           # Success indicators
 
+    # Session card colors
+    session_active_bg: str    # Active session card background (light green)
+    session_paused_bg: str    # Paused session card background (light yellow)
+
     # CustomTkinter mode
     ctk_appearance_mode: str  # "Dark" or "Light"
 
@@ -59,6 +63,8 @@ class Theme:
             "danger": self.danger,
             "danger_hover": self.danger_hover,
             "success": self.success,
+            "session_active_bg": self.session_active_bg,
+            "session_paused_bg": self.session_paused_bg,
         }
 
 
@@ -80,6 +86,8 @@ DARK_THEME = Theme(
     danger="#c0392b",
     danger_hover="#e74c3c",
     success="#27ae60",
+    session_active_bg="#1e3a2f",
+    session_paused_bg="#3a3520",
     ctk_appearance_mode="Dark"
 )
 
@@ -97,6 +105,8 @@ LIGHT_THEME = Theme(
     danger="#c0392b",
     danger_hover="#e74c3c",
     success="#27ae60",
+    session_active_bg="#d4edda",
+    session_paused_bg="#fff3cd",
     ctk_appearance_mode="Light"
 )
 
@@ -114,6 +124,8 @@ BLACK_THEME = Theme(
     danger="#b03025",
     danger_hover="#d44035",
     success="#228b22",
+    session_active_bg="#1a2e1a",
+    session_paused_bg="#2e2a1a",
     ctk_appearance_mode="Dark"
 )
 

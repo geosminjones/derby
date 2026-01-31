@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import customtkinter as ctk
 
+import db
 import themes
 from themes import FONT_FAMILY
 
@@ -54,6 +55,38 @@ class AppearanceTab:
             )
             radio.pack(anchor="w", pady=2)
 
+        # Table display section
+        display_section = ctk.CTkFrame(main_frame, fg_color=themes.get_colors()["container_bg"])
+        display_section.pack(fill=ctk.X, pady=(0, 10))
+
+        ctk.CTkLabel(
+            display_section,
+            text="Table Display",
+            font=ctk.CTkFont(family=FONT_FAMILY, weight="bold")
+        ).pack(anchor="w", padx=10, pady=(10, 5))
+
+        # Row dividers toggle
+        self.row_dividers_var = ctk.BooleanVar(
+            value=db.get_setting("show_row_dividers", "1") == "1"
+        )
+        ctk.CTkSwitch(
+            display_section,
+            text="Show row dividers",
+            variable=self.row_dividers_var,
+            command=self._on_row_dividers_change
+        ).pack(anchor="w", padx=10, pady=2)
+
+        # Group separators toggle
+        self.group_separators_var = ctk.BooleanVar(
+            value=db.get_setting("show_group_separators", "1") == "1"
+        )
+        ctk.CTkSwitch(
+            display_section,
+            text="Show group separators",
+            variable=self.group_separators_var,
+            command=self._on_group_separators_change
+        ).pack(anchor="w", padx=10, pady=(2, 10))
+
     def _on_theme_change(self):
         """Handle theme selection change."""
         selected_theme = self.theme_var.get()
@@ -61,6 +94,20 @@ class AppearanceTab:
         # Trigger full UI rebuild via main app
         self.app.switch_theme(selected_theme)
 
+    def _on_row_dividers_change(self):
+        """Handle row dividers toggle change."""
+        db.set_setting("show_row_dividers", "1" if self.row_dividers_var.get() else "0")
+        if hasattr(self.app, 'summary_tab') and self.app.summary_tab._tables_initialized:
+            self.app.summary_tab.refresh()
+
+    def _on_group_separators_change(self):
+        """Handle group separators toggle change."""
+        db.set_setting("show_group_separators", "1" if self.group_separators_var.get() else "0")
+        if hasattr(self.app, 'summary_tab') and self.app.summary_tab._tables_initialized:
+            self.app.summary_tab.refresh()
+
     def refresh(self):
         """Refresh the appearance tab (update radio selection to current theme)."""
         self.theme_var.set(themes.get_current_theme().name)
+        self.row_dividers_var.set(db.get_setting("show_row_dividers", "1") == "1")
+        self.group_separators_var.set(db.get_setting("show_group_separators", "1") == "1")

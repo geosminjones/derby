@@ -890,6 +890,43 @@ def get_active_session_by_project(project_name: str) -> Optional[Session]:
         )
 
 
+def get_session_by_id(session_id: int) -> Optional[Session]:
+    """
+    Fetch a single session by its ID.
+
+    Args:
+        session_id: The session ID to look up
+
+    Returns:
+        Session object if found, None otherwise
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, project_name, start_time, end_time, notes,
+                   is_paused, paused_seconds, pause_started_at
+            FROM sessions
+            WHERE id = ?
+        """, (session_id,))
+
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return Session(
+            id=row["id"],
+            project_name=row["project_name"],
+            start_time=datetime.fromisoformat(row["start_time"]),
+            end_time=datetime.fromisoformat(row["end_time"]) if row["end_time"] else None,
+            notes=row["notes"] or "",
+            is_paused=bool(row["is_paused"]) if row["is_paused"] is not None else False,
+            paused_seconds=row["paused_seconds"] or 0,
+            pause_started_at=datetime.fromisoformat(row["pause_started_at"]) if row["pause_started_at"] else None
+        )
+
+
 def stop_session(project_name: Optional[str] = None, notes: str = "") -> Optional[Session]:
     """
     Stop an active session.

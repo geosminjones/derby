@@ -341,7 +341,7 @@ class CTkTable(ctk.CTkFrame):
             The created CTkTableRow
         """
         # Add 1-pixel divider before row (except for first row)
-        if self.rows:
+        if self.rows and self.show_dividers:
             divider = CTkTableDivider(self.scrollable_frame)
             divider.pack(fill=ctk.X)
 
@@ -442,9 +442,10 @@ class CTkSessionCard(ctk.CTkFrame):
         **kwargs
     ):
         colors = themes.get_colors()
+        card_bg = colors["session_paused_bg"] if is_paused else colors["session_active_bg"]
         super().__init__(
             parent,
-            fg_color=colors["card_bg"],
+            fg_color=card_bg,
             corner_radius=8,
             **kwargs
         )
@@ -559,6 +560,10 @@ class CTkSessionCard(ctk.CTkFrame):
         """Update the pause state and button text."""
         colors = themes.get_colors()
         self.is_paused = is_paused
+
+        # Update card background color
+        card_bg = colors["session_paused_bg"] if is_paused else colors["session_active_bg"]
+        self.configure(fg_color=card_bg)
 
         # Update duration label color
         self.duration_label.configure(

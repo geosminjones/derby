@@ -161,13 +161,14 @@ class SummaryTab:
         # =====================================================================
 
         # Standard view table (for today/all time)
+        show_row_dividers = db.get_setting("show_row_dividers", "1") == "1"
         self.table_standard = CTkTable(
             self.table_container,
             columns=["Project", "Priority", "Tags", "Time", "Hours"],
             widths=[160, 50, 260, 90, 70],
             anchors=['w', 'w', 'w', 'w', 'w'],
             show_header=True,
-            show_dividers=False
+            show_dividers=show_row_dividers
         )
 
         # Weekly view table (placeholder columns, will be updated dynamically)
@@ -177,7 +178,7 @@ class SummaryTab:
             widths=[100, 50, 200, 50, 50, 50, 50, 50, 50, 50, 55],
             anchors=['w'] + ['w'] * 10,
             show_header=True,
-            show_dividers=False
+            show_dividers=show_row_dividers
         )
 
         # Monthly view table (placeholder columns, will be updated dynamically)
@@ -187,7 +188,7 @@ class SummaryTab:
             widths=[100, 50, 200, 50, 50, 50, 50, 50, 50, 55],
             anchors=['w'] + ['w'] * 9,
             show_header=True,
-            show_dividers=False
+            show_dividers=show_row_dividers
         )
 
         # =====================================================================
@@ -201,7 +202,7 @@ class SummaryTab:
             widths=[250, 120, 100],
             anchors=['w', 'w', 'w'],
             show_header=True,
-            show_dividers=False
+            show_dividers=show_row_dividers
         )
 
         # Weekly view table
@@ -211,7 +212,7 @@ class SummaryTab:
             widths=[120, 55, 55, 55, 55, 55, 55, 55, 60],
             anchors=['w'] + ['w'] * 8,
             show_header=True,
-            show_dividers=False
+            show_dividers=show_row_dividers
         )
 
         # Monthly view table
@@ -221,7 +222,7 @@ class SummaryTab:
             widths=[120, 55, 55, 55, 55, 55, 55, 60],
             anchors=['w'] + ['w'] * 7,
             show_header=True,
-            show_dividers=False
+            show_dividers=show_row_dividers
         )
 
         # Set default active tables
@@ -233,6 +234,17 @@ class SummaryTab:
         self._show_bg_table_view("standard")
 
         self._tables_initialized = True
+
+    def _update_table_divider_settings(self):
+        """Update show_dividers setting on all tables based on current setting."""
+        show_row_dividers = db.get_setting("show_row_dividers", "1") == "1"
+        if self._tables_initialized:
+            self.table_standard.show_dividers = show_row_dividers
+            self.table_weekly.show_dividers = show_row_dividers
+            self.table_monthly.show_dividers = show_row_dividers
+            self.bg_table_standard.show_dividers = show_row_dividers
+            self.bg_table_weekly.show_dividers = show_row_dividers
+            self.bg_table_monthly.show_dividers = show_row_dividers
 
     def _show_table_view(self, view: str):
         """Show the specified project table and hide others."""
@@ -351,6 +363,9 @@ class SummaryTab:
         # Initialize tables on first refresh (lazy initialization)
         if not self._tables_initialized:
             self._initialize_tables()
+
+        # Update divider settings on all tables (in case setting changed)
+        self._update_table_divider_settings()
 
         period = self.period_var.get()
 
@@ -475,7 +490,8 @@ class SummaryTab:
 
                     # Add separator between priority groups
                     if last_priority is not None and priority != last_priority:
-                        self.table.add_divider()
+                        if db.get_setting("show_group_separators", "1") == "1":
+                            self.table.add_divider()
                     last_priority = priority
 
                     hours = seconds // 3600
@@ -522,7 +538,8 @@ class SummaryTab:
                 last_tag = None
                 for tag_name, tag_data in tag_summary.items():
                     if last_tag is not None:
-                        self.table.add_divider()
+                        if db.get_setting("show_group_separators", "1") == "1":
+                            self.table.add_divider()
                     last_tag = tag_name
 
                     for project_name, pdata in tag_data["projects"].items():
@@ -541,7 +558,8 @@ class SummaryTab:
                         display_name = project_name + " *" if pdata["has_multiple_tags"] else project_name
                         priority = project_priority_map.get(project_name, 3)
                         priority_label = str(priority)
-                        tags_str = ", ".join(project_tags_map.get(project_name, []))
+                        # When sorting by tag, show only the current tag being grouped by
+                        tags_str = tag_name
 
                         self.table.add_row(f"project_{row_counter}", (display_name, priority_label, tags_str, time_str, hours_decimal))
                         row_counter += 1
@@ -666,7 +684,8 @@ class SummaryTab:
                     priority = data["priority"]
 
                     if last_priority is not None and priority != last_priority:
-                        self.table.add_divider()
+                        if db.get_setting("show_group_separators", "1") == "1":
+                            self.table.add_divider()
                     last_priority = priority
 
                     day_values = []
@@ -720,7 +739,8 @@ class SummaryTab:
                 last_tag = None
                 for tag_name, tag_data in tag_summary.items():
                     if last_tag is not None:
-                        self.table.add_divider()
+                        if db.get_setting("show_group_separators", "1") == "1":
+                            self.table.add_divider()
                     last_tag = tag_name
 
                     for project_name, pdata in tag_data["projects"].items():
@@ -742,7 +762,8 @@ class SummaryTab:
                         display_name = project_name + " *" if pdata["has_multiple_tags"] else project_name
                         priority = project_priority_map.get(project_name, 3)
                         priority_label = str(priority)
-                        tags_str = ", ".join(project_tags_map.get(project_name, []))
+                        # When sorting by tag, show only the current tag being grouped by
+                        tags_str = tag_name
 
                         self.table.add_row(f"project_{row_counter}", (display_name, priority_label, tags_str, *day_values, total_str))
                         row_counter += 1
@@ -896,7 +917,8 @@ class SummaryTab:
                     priority = data["priority"]
 
                     if last_priority is not None and priority != last_priority:
-                        self.table.add_divider()
+                        if db.get_setting("show_group_separators", "1") == "1":
+                            self.table.add_divider()
                     last_priority = priority
 
                     period_values = []
@@ -956,7 +978,8 @@ class SummaryTab:
                 last_tag = None
                 for tag_name, tag_data in tag_summary.items():
                     if last_tag is not None:
-                        self.table.add_divider()
+                        if db.get_setting("show_group_separators", "1") == "1":
+                            self.table.add_divider()
                     last_tag = tag_name
 
                     for project_name, pdata in tag_data["projects"].items():
@@ -983,7 +1006,8 @@ class SummaryTab:
                         display_name = project_name + " *" if pdata["has_multiple_tags"] else project_name
                         priority = project_priority_map.get(project_name, 3)
                         priority_label = str(priority)
-                        tags_str = ", ".join(project_tags_map.get(project_name, []))
+                        # When sorting by tag, show only the current tag being grouped by
+                        tags_str = tag_name
 
                         self.table.add_row(f"project_{row_counter}", (display_name, priority_label, tags_str, *period_values, total_str))
                         row_counter += 1
