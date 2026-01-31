@@ -1,110 +1,28 @@
-# Derby
+# Derby v0.4.2
 
-A minimal, local-first time tracking application with both CLI and GUI interfaces. No cloud, no accounts, no telemetry—just a SQLite database stored locally.
+Derby is a 100% local time-tracking app written in Python with a GUI built in CustomTkinter. It is designed to be feature-competitive with all other time-tracking applications that I have ever used, especially with their paid versions, which I have always felt were subjected to insane markups because of the demand from lawyers. Fortunately, this application should be well-suited for even use by said lawyers, if they can get past the fact that it is built with the last decade's GUI technology, and only built in that way because it's some of the only computer language that I can speak -- and barely, at that. Derby's notable features include:
 
-## Quick Start
+- The ability to store hundreds of different projects, and data for them
+- Capable of running several projects concurrently, as well as pausing them
+- A second type of project called "Background Tasks" you can use to track your second-screen habits, your music listening, or whatever else you might want to
+- The ability to view all past sessions in order sorted by end time
+- A summary tab for viewing data from today, this week, this month, last month, and all time (I would not recommend clicking that one right now!) with configurable row borders
+- The ability to tag projects with several different tags, assign them a priority level, and sort projects by these tags and priority levels in the summary tab
+- Dark mode, deep black mode, and light mode visual appearances
+- Configurable database location and database backups
 
-```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+You may notice that this is me finally getting around to writing a README by hand, so it's a little barren right now. I'll be adding per-tab sections over the coming days. I don't think many people are using Derby right now anyways, but if more do, I'll be very happy to more aggressively support it with my time and communication, and especially through better, human-made documentation. It's just now gotten useful enough for me to think about things like that, anyways.
 
-# 2a. Run the GUI
-python gui.py
+## Installation
 
-# 2b. Or use the CLI
-python cli.py start "Project Name"    # Start tracking
-python cli.py stop                     # Stop tracking
-python cli.py status                   # See current state
+The packaged Derby executables are compiled by me in a virtual environment, and I use them extensively on my own Windows machine, so they should generally work. If they do not, let me know, and I'll be on top of it, but otherwise, you can also compile your own executable with the following command, after navigating to the directory post-download and installing requirements:
 
-# Build the executable for GUI use
 pyinstaller --onefile gui.py --name derby --icon=jockey.ico --noconsole
 
-```
+This should produce a named executable (albeit without a version number) that doesn't spawn a console and works just fine. It's the command I use on my own machine.
 
-## GUI Features
+## General Usage
 
-The GUI (`python gui.py`) provides a tabbed interface:
+All timer activities done using Derby are done using projects. You can create projects to time in the Projects tab, but you can also just type in whatever you'd like to call a new project into the selector bar in the Timer tab, and then hit start. This will create a new project with the same name. You can click the arrow next to that bar to select from your already-created projects, where they will be sorted by priority to support large numbers of projects (I use about 50). Starting a project through any of these means will spawn a project card in the frame below it, with buttons that allow you to either stop a project, pause a playing project, or play a paused project. 
 
-- **Timer Tab**: Start/stop sessions for regular projects and background tasks, view active sessions with live duration updates
-- **History Tab**: View past sessions with filtering by project and time period, delete sessions
-- **Summary Tab**: Time aggregations by period (Today/This Week/All Time) with weekly day-by-day breakdown
-- **Projects Tab**: Manage projects and background tasks—add, rename, edit priority (1-5), and manage tags
-
-## Commands Reference
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `start <project>` | Begin tracking time | `python cli.py start "Job Search"` |
-| `stop` | End the current session | `python cli.py stop --notes "Applied to 3 jobs"` |
-| `switch <project>` | Stop current, start new | `python cli.py switch "Reading"` |
-| `status` | Show current session | `python cli.py status` |
-| `log <project> <duration>` | Add time retroactively | `python cli.py log Exercise 45m` |
-| `list` | Show recent sessions | `python cli.py list --limit 20` |
-| `summary` | Time totals by project | `python cli.py summary --period week` |
-| `projects` | List all projects | `python cli.py projects` |
-| `export` | Save to CSV | `python cli.py export --output tracking.csv` |
-| `cancel` | Discard active session | `python cli.py cancel` |
-| `delete <id>` | Remove a session | `python cli.py delete 42` |
-
-## Duration Formats
-
-When using `log`, you can specify durations like:
-- `1h30m` — 1 hour 30 minutes  
-- `2h` — 2 hours
-- `45m` — 45 minutes
-- `90` — 90 minutes (bare numbers = minutes)
-
-## Building a Standalone Executable
-
-To create a single file you can run without Python installed:
-
-```bash
-# Install PyInstaller
-pip install pyinstaller
-
-# Build the executable for command-line interface use
-pyinstaller --onefile cli.py --name tt
-
-# Build the executable for GUI use
-pyinstaller --onefile gui.py --name derby --icon=jockey.ico
-
-# The executable will be in dist/tt (or dist/tt.exe on Windows)
-```
-
-After building, move `dist/tt` to somewhere in your PATH for easy access.
-
-## Data Storage
-
-All data is stored in `~/.timetrack/timetrack.db`. This is a standard SQLite database file. You can:
-
-- Back it up by copying the file
-- Inspect it with any SQLite browser (like DB Browser for SQLite)
-- Move it between machines
-
-## Project Structure
-
-```
-derby/
-├── cli.py           # CLI entry point (Typer-based)
-├── gui.py           # GUI entry point (Tkinter-based)
-├── db.py            # Database operations (SQLite)
-├── models.py        # Data structures (Session, Project, Tag)
-├── requirements.txt # Python dependencies
-├── README.md        # This file
-└── CLAUDE.md        # Development guidelines
-```
-
-## Features
-
-- **Projects**: Regular time-tracked projects with priority levels (1-5) and tags
-- **Background Tasks**: Separate category for ongoing background activities
-- **Tags**: Organize projects with tags for filtering and categorization
-- **Priority Levels**: 1 (Critical) to 5 (Very Low) for project organization
-- **Manual Logging**: Add time retroactively with the `log` command or GUI dialog
-- **CSV Export**: Export session data for external analysis
-
-## Future Ideas
-
-- **Idle detection**: A background process that auto-pauses after inactivity
-- **Pomodoro mode**: Auto-stop after 25 minutes with a break timer
-- **Daily goals**: Set target hours per project and track progress
+Don't forget, you can view your data in-app with the Summary tab, and you can configure the appearance of the app, row dividers, and database location in the Appearance tab. You may also view your session history in the aptly-named History tab.

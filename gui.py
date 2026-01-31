@@ -105,7 +105,7 @@ class DerbyApp:
         self.tab_var = ctk.StringVar(value="Timer")
         self.tab_switcher = ctk.CTkSegmentedButton(
             header_frame,
-            values=["Timer", "History", "Summary", "Projects", "Appearance"],
+            values=["Timer", "History", "Summary", "Projects", "Settings"],
             variable=self.tab_var,
             command=self._on_tab_change,
             fg_color=themes.get_colors()["container_bg"],
@@ -132,7 +132,7 @@ class DerbyApp:
 
         # Create individual tab frames (all stacked in same grid cell)
         self.tab_frames = {}
-        for tab_name in ["Timer", "History", "Summary", "Projects", "Appearance"]:
+        for tab_name in ["Timer", "History", "Summary", "Projects", "Settings"]:
             frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
             frame.grid(row=0, column=0, sticky="nsew")
             self.tab_frames[tab_name] = frame
@@ -146,7 +146,7 @@ class DerbyApp:
         self.history_tab = HistoryTab(self.tab_frames["History"], self)
         self.summary_tab = SummaryTab(self.tab_frames["Summary"], self)
         self.projects_tab = ProjectsTab(self.tab_frames["Projects"], self)
-        self.appearance_tab = AppearanceTab(self.tab_frames["Appearance"], self)
+        self.settings_tab = AppearanceTab(self.tab_frames["Settings"], self)
 
     def _create_status_bar(self):
         """Create status bar at bottom of window."""
@@ -209,8 +209,8 @@ class DerbyApp:
                 self.summary_tab.refresh()
             elif tab_name == "Projects":
                 self.projects_tab.refresh()
-            elif tab_name == "Appearance":
-                self.appearance_tab.refresh()
+            elif tab_name == "Settings":
+                self.settings_tab.refresh()
 
     def _export_csv(self):
         """Export sessions to CSV file."""
@@ -243,9 +243,9 @@ class DerbyApp:
         CTkMessagebox(
             self.root,
             "About Derby",
-            "Derby v1.0\n\n"
-            "A simple, local-first time tracking application.\n\n"
-            "Data stored in: ~/.timetrack/timetrack.db",
+            f"Derby v1.0\n\n"
+            f"A simple, local-first time tracking application.\n\n"
+            f"Data stored in: {db.get_database_path()}",
             "info"
         )
 

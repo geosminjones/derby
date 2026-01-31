@@ -466,6 +466,10 @@ class CTkSessionCard(ctk.CTkFrame):
         self.pause_yellow = "#e6b800"
         self.pause_yellow_hover = "#ccaa00"
 
+        # Green color for play button
+        self.play_green = colors["success"]  # #27ae60
+        self.play_green_hover = "#2ecc71"    # Lighter green for hover
+
         # Main content container with padding
         content = ctk.CTkFrame(self, fg_color="transparent")
         content.pack(fill=ctk.BOTH, expand=True, padx=15, pady=12)
@@ -502,22 +506,39 @@ class CTkSessionCard(ctk.CTkFrame):
         )
         self.stop_btn.pack(side=ctk.LEFT, padx=(0, 6))
 
-        # Pause/Resume button - yellow with black text
-        pause_text = "Paused" if self.is_paused else "Pause"
-        pause_font_weight = "bold" if self.is_paused else "normal"
+        # Pause button - yellow with black text (visible when not paused)
         self.pause_btn = ctk.CTkButton(
             button_frame,
-            text=pause_text,
+            text="Pause",
             width=60,
             height=26,
             fg_color=self.pause_yellow,
             hover_color=self.pause_yellow_hover,
             text_color="#000000",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight=pause_font_weight),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
             corner_radius=4,
             command=self._on_toggle_pause_click
         )
-        self.pause_btn.pack(side=ctk.LEFT)
+
+        # Play button - green with white text (visible when paused)
+        self.play_btn = ctk.CTkButton(
+            button_frame,
+            text="Play",
+            width=60,
+            height=26,
+            fg_color=self.play_green,
+            hover_color=self.play_green_hover,
+            text_color="#ffffff",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            corner_radius=4,
+            command=self._on_toggle_pause_click
+        )
+
+        # Show appropriate button based on pause state
+        if self.is_paused:
+            self.play_btn.pack(side=ctk.LEFT)
+        else:
+            self.pause_btn.pack(side=ctk.LEFT)
 
         # Duration (right) - larger and prominent
         self.duration_label = ctk.CTkLabel(
@@ -557,7 +578,7 @@ class CTkSessionCard(ctk.CTkFrame):
         self.duration_label.configure(text=duration)
 
     def update_pause_state(self, is_paused: bool):
-        """Update the pause state and button text."""
+        """Update the pause state and toggle Pause/Play button visibility."""
         colors = themes.get_colors()
         self.is_paused = is_paused
 
@@ -570,13 +591,13 @@ class CTkSessionCard(ctk.CTkFrame):
             text_color=colors["success"] if not is_paused else colors["text_secondary"]
         )
 
-        # Update button text and font weight
-        pause_text = "Paused" if is_paused else "Pause"
-        pause_font_weight = "bold" if is_paused else "normal"
-        self.pause_btn.configure(
-            text=pause_text,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight=pause_font_weight)
-        )
+        # Toggle button visibility
+        if is_paused:
+            self.pause_btn.pack_forget()
+            self.play_btn.pack(side=ctk.LEFT)
+        else:
+            self.play_btn.pack_forget()
+            self.pause_btn.pack(side=ctk.LEFT)
 
 
 class CTkSessionList(ctk.CTkFrame):

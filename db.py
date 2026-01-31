@@ -14,6 +14,7 @@ Key concepts:
 - Transaction: A group of operations that succeed or fail together
 """
 
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -23,8 +24,119 @@ from typing import Optional
 # Import our data models
 from models import Project, Session, Tag
 
-# Use a dedicated folder in the user's home directory
-DATA_DIR = Path.home() / ".timetrack"
+# Default data directory in user's home
+DEFAULT_DATA_DIR = Path.home() / ".timetrack"
+
+# Config file to store the data directory location
+# This is stored in the default location so we can always find it
+CONFIG_DIR = Path.home() / ".timetrack"
+CONFIG_FILE = CONFIG_DIR / "config.txt"
+
+
+def _load_data_directory() -> Path:
+    """
+    Load the configured data directory from config file.
+    Falls back to default if not configured.
+    """
+    if CONFIG_FILE.exists():
+        try:
+            config_path = Path(CONFIG_FILE.read_text().strip())
+            if config_path.exists() and config_path.is_dir():
+                return config_path
+        except Exception:
+            pass
+    return DEFAULT_DATA_DIR
+
+
+def _save_data_directory(path: Path):
+    """Save the data directory path to config file."""
+    CONFIG_DIR.mkdir(exist_ok=True)
+    CONFIG_FILE.write_text(str(path))
+
+
+def get_data_directory() -> Path:
+    """Get the current data directory."""
+    return DATA_DIR
+
+
+def get_database_path() -> Path:
+    """Get the full path to the database file."""
+    return DATABASE_PATH
+
+
+def set_data_directory(new_path: Path, copy_existing: bool = False) -> bool:
+    """
+    Set a new data directory for the database.
+
+    Args:
+        new_path: The new directory to use for storing the database
+        copy_existing: If True, copy the current database to the new location
+
+    Returns:
+        True if successful, False otherwise
+    """
+    global DATA_DIR, DATABASE_PATH
+
+    try:
+        new_path = Path(new_path)
+        new_path.mkdir(parents=True, exist_ok=True)
+
+        new_db_path = new_path / "timetrack.db"
+
+        if copy_existing and DATABASE_PATH.exists():
+            shutil.copy2(DATABASE_PATH, new_db_path)
+
+        # Update the module-level variables
+        DATA_DIR = new_path
+        DATABASE_PATH = new_db_path
+
+        # Save the new path to config
+        _save_data_directory(new_path)
+
+        # Initialize the database at the new location
+        init_database()
+
+        return True
+    except Exception as e:
+        print(f"Error setting data directory: {e}")
+        return False
+
+
+def backup_database(backup_path: Path) -> bool:
+    """
+    Create a backup of the current database.
+
+    Args:
+        backup_path: Directory to save the backup file
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        backup_path = Path(backup_path)
+        backup_path.mkdir(parents=True, exist_ok=True)
+
+        # Create a timestamped backup filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = backup_path / f"timetrack_backup_{timestamp}.db"
+
+        if DATABASE_PATH.exists():
+            shutil.copy2(DATABASE_PATH, backup_file)
+            return True
+        return False
+    except Exception as e:
+        print(f"Error backing up database: {e}")
+        return False
+
+
+def get_backup_filename() -> str:
+    """Get a timestamped backup filename."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"timetrack_backup_{timestamp}.db"
+
+
+# Load the configured data directory on module import
+DATA_DIR = _load_data_directory()
 DATA_DIR.mkdir(exist_ok=True)  # Create folder if it doesn't exist
 DATABASE_PATH = DATA_DIR / "timetrack.db"
 

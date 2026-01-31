@@ -15,10 +15,214 @@ from models import parse_duration_string
 from dialogs import CTkMessagebox
 from ctk_table import CTkSessionList
 from gui_utils import batch_update
+from projects_tab import PRIORITY_LABELS
 
 if TYPE_CHECKING:
     from gui import DerbyApp
     from models import Project
+
+
+class ProjectSelectorPopup(ctk.CTkToplevel):
+    """Popup window displaying projects organized by priority in columns."""
+
+    def __init__(self, parent, anchor_widget, projects_by_priority: dict, on_select: callable):
+        super().__init__(parent)
+
+        self.on_select = on_select
+        self.overrideredirect(True)  # Remove window decorations
+        self.configure(fg_color=themes.get_colors()["bg_dark"])
+
+        # Position below anchor widget
+        self.update_idletasks()
+        x = anchor_widget.winfo_rootx()
+        y = anchor_widget.winfo_rooty() + anchor_widget.winfo_height() + 2
+        self.geometry(f"+{x}+{y}")
+
+        self._build_ui(projects_by_priority)
+
+        # Close on click outside or Escape
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<FocusOut>", self._on_focus_out)
+        self.focus_set()
+        self.grab_set()
+
+    def _on_focus_out(self, event):
+        """Close popup when focus is lost (clicked outside)."""
+        # Check if focus went to a child widget
+        try:
+            if event.widget == self or self.focus_get() is None:
+                self.after(100, self._check_focus)
+        except Exception:
+            pass
+
+    def _check_focus(self):
+        """Check if popup should close due to lost focus."""
+        try:
+            focused = self.focus_get()
+            if focused is None or not str(focused).startswith(str(self)):
+                self.destroy()
+        except Exception:
+            self.destroy()
+
+    def _build_ui(self, projects_by_priority: dict):
+        """Build the multi-column popup UI."""
+        colors = themes.get_colors()
+
+        # Main container with border effect
+        main_frame = ctk.CTkFrame(
+            self,
+            fg_color=colors["bg_dark"],
+            corner_radius=8,
+            border_width=1,
+            border_color=colors["separator"]
+        )
+        main_frame.pack(fill=ctk.BOTH, expand=True, padx=2, pady=2)
+
+        # Create 5 columns for priorities 1-5
+        columns_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        columns_frame.pack(fill=ctk.BOTH, expand=True, padx=5, pady=5)
+
+        column_width = 115
+        max_height = 250
+
+        for priority in range(1, 6):
+            # Column container
+            col_frame = ctk.CTkFrame(columns_frame, fg_color=colors["bg_medium"], corner_radius=6)
+            col_frame.pack(side=ctk.LEFT, fill=ctk.Y, padx=2)
+
+            # Header
+            header_text = f"P{priority}"
+            if priority in PRIORITY_LABELS:
+                label = PRIORITY_LABELS[priority]
+                # Shorten labels for column headers
+                if label == "Very Low":
+                    label = "V.Low"
+                header_text = f"P{priority} ({label})"
+
+            header = ctk.CTkLabel(
+                col_frame,
+                text=header_text,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=10, weight="bold"),
+                text_color=colors["text_primary"],
+                fg_color=colors["bg_light"],
+                corner_radius=4,
+                width=column_width,
+                height=24
+            )
+            header.pack(fill=ctk.X, padx=3, pady=(3, 2))
+
+            # Scrollable area for projects
+            scroll_frame = ctk.CTkScrollableFrame(
+                col_frame,
+                fg_color="transparent",
+                width=column_width - 10,
+                height=max_height,
+                scrollbar_button_color=colors["bg_light"],
+                scrollbar_button_hover_color=colors["separator"]
+            )
+            scroll_frame.pack(fill=ctk.BOTH, expand=True, padx=3, pady=(0, 3))
+
+            projects = projects_by_priority.get(priority, [])
+
+            if not projects:
+                # Empty column placeholder
+                ctk.CTkLabel(
+                    scroll_frame,
+                    text="(none)",
+                    font=ctk.CTkFont(family=FONT_FAMILY, size=10),
+                    text_color=colors["text_secondary"]
+                ).pack(pady=10)
+            else:
+                # Project buttons
+                for project_name in projects:
+                    btn = ctk.CTkButton(
+                        scroll_frame,
+                        text=project_name,
+                        font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+                        fg_color=colors["card_bg"],
+                        hover_color=colors["bg_light"],
+                        text_color=colors["text_primary"],
+                        anchor="w",
+                        width=column_width - 15,
+                        height=26,
+                        corner_radius=4,
+                        command=lambda name=project_name: self._select_project(name)
+                    )
+                    btn.pack(fill=ctk.X, pady=1)
+
+    def _select_project(self, project_name: str):
+        """Handle project selection."""
+        if self.on_select:
+            self.on_select(project_name)
+        self.destroy()
+
+
+class ProjectSelector(ctk.CTkFrame):
+    """Custom project selector with entry field and multi-column dropdown."""
+
+    def __init__(self, parent, variable: ctk.StringVar, width: int = 250, height: int = 32, **kwargs):
+        colors = themes.get_colors()
+        super().__init__(parent, fg_color="transparent", **kwargs)
+
+        self.variable = variable
+        self.projects_by_priority: dict = {1: [], 2: [], 3: [], 4: [], 5: []}
+        self.popup = None
+
+        # Entry field for typing
+        self.entry = ctk.CTkEntry(
+            self,
+            textvariable=variable,
+            width=width - 35,
+            height=height,
+            corner_radius=6,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
+        )
+        self.entry.pack(side=ctk.LEFT)
+
+        # Dropdown button
+        self.dropdown_btn = ctk.CTkButton(
+            self,
+            text="▼",
+            width=30,
+            height=height,
+            corner_radius=6,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=10),
+            fg_color=colors["bg_light"],
+            hover_color=colors["separator"],
+            text_color=colors["text_primary"],
+            command=self._toggle_popup
+        )
+        self.dropdown_btn.pack(side=ctk.LEFT, padx=(3, 0))
+
+    def set_projects(self, projects_by_priority: dict):
+        """Update the projects dictionary."""
+        self.projects_by_priority = projects_by_priority
+
+    def get(self) -> str:
+        """Get the current entry value."""
+        return self.variable.get()
+
+    def _toggle_popup(self):
+        """Toggle the dropdown popup."""
+        if self.popup is not None and self.popup.winfo_exists():
+            self.popup.destroy()
+            self.popup = None
+            return
+
+        # Get the root window
+        root = self.winfo_toplevel()
+
+        self.popup = ProjectSelectorPopup(
+            root,
+            self,
+            self.projects_by_priority,
+            on_select=self._on_project_selected
+        )
+
+    def _on_project_selected(self, project_name: str):
+        """Handle project selection from popup."""
+        self.variable.set(project_name)
+        self.popup = None
 
 
 class TimerTab:
@@ -76,15 +280,13 @@ class TimerTab:
             text_color=colors["text_secondary"]
         ).pack(side=ctk.LEFT)
 
-        self.project_combo = ctk.CTkComboBox(
+        self.project_selector = ProjectSelector(
             project_row,
             variable=self.project_var,
             width=250,
-            height=32,
-            corner_radius=6,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12)
+            height=32
         )
-        self.project_combo.pack(side=ctk.LEFT, padx=10)
+        self.project_selector.pack(side=ctk.LEFT, padx=10)
 
         start_btn = ctk.CTkButton(
             project_row,
@@ -217,17 +419,23 @@ class TimerTab:
         """Refresh only the combo box values (when projects change)."""
         project_map = self._get_projects_map()
 
-        # Extract and sort project names by type
-        project_names = sorted(
-            [p.name for p in project_map.values() if not p.is_background],
-            key=str.lower
-        )
+        # Group regular projects by priority
+        projects_by_priority = {1: [], 2: [], 3: [], 4: [], 5: []}
+        for p in project_map.values():
+            if not p.is_background:
+                projects_by_priority[p.priority].append(p.name)
+
+        # Sort each priority group alphabetically
+        for priority in projects_by_priority:
+            projects_by_priority[priority].sort(key=str.lower)
+
+        self.project_selector.set_projects(projects_by_priority)
+
+        # Background tasks unchanged
         bg_task_names = sorted(
             [p.name for p in project_map.values() if p.is_background],
             key=str.lower
         )
-
-        self.project_combo.configure(values=project_names)
         self.bg_task_combo.configure(values=bg_task_names)
 
     def refresh_sessions(self):
