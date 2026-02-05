@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
-summary_tab.py - Summary tab for time aggregations in Derby GUI
+summary_tab.py - Summary tab for time aggregations in Derby GUI (PyQt version)
 """
 
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Callable
 
-import customtkinter as ctk
-from tkinter import ttk
+from PyQt6.QtWidgets import (
+    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QButtonGroup, QCheckBox, QSplitter, QStackedWidget
+)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
 
 import db
 import themes
-from ctk_table import CTkTable
+from jframes import CTkTable, batch_update
 from themes import FONT_FAMILY
-from gui_utils import batch_update
 
 if TYPE_CHECKING:
     from gui import DerbyApp
@@ -29,18 +32,131 @@ PRIORITY_LABELS = {
 }
 
 
+class ToggleButton(QPushButton):
+    """A styled button for toggle button groups."""
+
+    def __init__(self, text: str, value: str, parent=None):
+        super().__init__(text, parent)
+        self.value = value
+        self.setCheckable(True)
+        self.setFont(QFont(FONT_FAMILY, 10))
+        self.setMinimumHeight(28)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_style(False)
+
+    def _update_style(self, selected: bool):
+        """Update button style based on selection state."""
+        colors = themes.get_colors()
+        if selected:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors['bg_light']};
+                    color: {colors['text_primary']};
+                    border: none;
+                    border-radius: 6px;
+                    padding: 4px 12px;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors['card_bg']};
+                    color: {colors['text_secondary']};
+                    border: none;
+                    border-radius: 6px;
+                    padding: 4px 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: {colors['separator']};
+                }}
+            """)
+
+    def setChecked(self, checked: bool):
+        super().setChecked(checked)
+        self._update_style(checked)
+
+
+class ToggleButtonGroup(QFrame):
+    """A group of toggle buttons that act like radio buttons."""
+
+    def __init__(
+        self,
+        options: list[tuple[str, str]],  # [(value, label), ...]
+        on_change: Optional[Callable[[str], None]] = None,
+        parent=None
+    ):
+        super().__init__(parent)
+        colors = themes.get_colors()
+
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: transparent;
+            }}
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self.buttons: dict[str, ToggleButton] = {}
+        self.button_group = QButtonGroup(self)
+        self.button_group.setExclusive(True)
+
+        for i, (value, label) in enumerate(options):
+            btn = ToggleButton(label, value)
+            self.buttons[value] = btn
+            self.button_group.addButton(btn, i)
+            layout.addWidget(btn)
+
+        # Connect signal
+        self.button_group.buttonClicked.connect(self._on_button_clicked)
+
+        # Store callback
+        self._on_change = on_change
+
+        # Select first option by default
+        if options:
+            first_value = options[0][0]
+            self.buttons[first_value].setChecked(True)
+            self._current_value = first_value
+        else:
+            self._current_value = ""
+
+    def _on_button_clicked(self, button):
+        """Handle button click."""
+        for value, btn in self.buttons.items():
+            btn._update_style(btn == button)
+            if btn == button:
+                self._current_value = value
+
+        if self._on_change:
+            self._on_change(self._current_value)
+
+    def get_value(self) -> str:
+        """Get the currently selected value."""
+        return self._current_value
+
+    def set_value(self, value: str):
+        """Set the current value."""
+        if value in self.buttons:
+            self.buttons[value].setChecked(True)
+            self._current_value = value
+            for v, btn in self.buttons.items():
+                btn._update_style(v == value)
+
+
 class SummaryTab:
     """Summary tab for time aggregations with split view for projects and background tasks."""
 
     # Day abbreviations for column headers
     DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-    def __init__(self, parent, app: 'DerbyApp'):
+    def __init__(self, parent: QWidget, app: 'DerbyApp'):
         self.frame = parent
         self.app = app
-        self.period_var = ctk.StringVar(value="today")
-        self.sort_var = ctk.StringVar(value="priority")
-        self.group_var = ctk.BooleanVar(value=False)
+        self.period_var = "today"
+        self.sort_var = "priority"
+        self.group_var = False
         self.current_view = "standard"  # "standard", "weekly", or "monthly"
         self.bg_current_view = "standard"  # Track bg table view separately
         self._tables_initialized = False  # Track if tables have been created
@@ -48,108 +164,200 @@ class SummaryTab:
 
     def _build_ui(self):
         """Build the summary tab UI with split view."""
-        # Runtime import to avoid circular dependency
-        from gui import TreeviewFrame
-
-        # Period selection
-        period_frame = ctk.CTkFrame(self.frame, fg_color=themes.get_colors()["card_bg"])
-        period_frame.pack(fill=ctk.X, padx=10, pady=5)
-
-        ctk.CTkLabel(period_frame, text="Period:").pack(side=ctk.LEFT, padx=5)
-
-        for text, value in [("Today", "today"), ("This Week", "week"), ("This Month", "month"), ("Last Month", "last_month"), ("All Time", "all")]:
-            rb = ctk.CTkRadioButton(
-                period_frame,
-                text=text,
-                variable=self.period_var,
-                value=value,
-                command=self.refresh
-            )
-            rb.pack(side=ctk.LEFT, padx=10)
-
-        # Sort selection
-        sort_frame = ctk.CTkFrame(self.frame, fg_color=themes.get_colors()["card_bg"])
-        sort_frame.pack(fill=ctk.X, padx=10, pady=5)
-
-        ctk.CTkLabel(sort_frame, text="Sort:").pack(side=ctk.LEFT, padx=5)
-
-        for text, value in [("Priority", "priority"), ("Tag", "tag")]:
-            rb = ctk.CTkRadioButton(
-                sort_frame,
-                text=text,
-                variable=self.sort_var,
-                value=value,
-                command=self.refresh
-            )
-            rb.pack(side=ctk.LEFT, padx=10)
-
-        # Group checkbox on right side
-        group_check = ctk.CTkCheckBox(
-            sort_frame,
-            text="Group?",
-            variable=self.group_var,
-            command=self.refresh
-        )
-        group_check.pack(side=ctk.RIGHT, padx=10)
-
-        # Main content area - use ttk.PanedWindow for resizable split
         colors = themes.get_colors()
 
-        # Configure ttk style for the paned window sash
-        style = ttk.Style()
-        style.configure("Summary.TPanedwindow", background=colors["bg_dark"])
+        # Main layout for the tab
+        main_layout = QVBoxLayout(self.frame)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(8)
 
-        self.paned = ttk.PanedWindow(self.frame, orient="vertical", style="Summary.TPanedwindow")
-        self.paned.pack(fill=ctk.BOTH, expand=True, padx=5, pady=5)
+        # Period selection frame
+        period_frame = QFrame()
+        period_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors['card_bg']};
+                border-radius: 8px;
+            }}
+        """)
+        period_layout = QHBoxLayout(period_frame)
+        period_layout.setContentsMargins(10, 8, 10, 8)
+        period_layout.setSpacing(8)
+
+        period_label = QLabel("Period:")
+        period_label.setFont(QFont(FONT_FAMILY, 11))
+        period_label.setStyleSheet(f"color: {colors['text_primary']};")
+        period_layout.addWidget(period_label)
+
+        self.period_group = ToggleButtonGroup(
+            options=[
+                ("today", "Today"),
+                ("week", "This Week"),
+                ("month", "This Month"),
+                ("last_month", "Last Month"),
+                ("all", "All Time")
+            ],
+            on_change=self._on_period_change
+        )
+        period_layout.addWidget(self.period_group)
+        period_layout.addStretch()
+
+        main_layout.addWidget(period_frame)
+
+        # Sort selection frame
+        sort_frame = QFrame()
+        sort_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors['card_bg']};
+                border-radius: 8px;
+            }}
+        """)
+        sort_layout = QHBoxLayout(sort_frame)
+        sort_layout.setContentsMargins(10, 8, 10, 8)
+        sort_layout.setSpacing(8)
+
+        sort_label = QLabel("Sort:")
+        sort_label.setFont(QFont(FONT_FAMILY, 11))
+        sort_label.setStyleSheet(f"color: {colors['text_primary']};")
+        sort_layout.addWidget(sort_label)
+
+        self.sort_group = ToggleButtonGroup(
+            options=[
+                ("priority", "Priority"),
+                ("tag", "Tag")
+            ],
+            on_change=self._on_sort_change
+        )
+        sort_layout.addWidget(self.sort_group)
+        sort_layout.addStretch()
+
+        # Group checkbox
+        self.group_check = QCheckBox("Group?")
+        self.group_check.setFont(QFont(FONT_FAMILY, 11))
+        self.group_check.setStyleSheet(f"""
+            QCheckBox {{
+                color: {colors['text_primary']};
+                spacing: 6px;
+            }}
+            QCheckBox::indicator {{
+                width: 18px;
+                height: 18px;
+            }}
+        """)
+        self.group_check.stateChanged.connect(self._on_group_change)
+        sort_layout.addWidget(self.group_check)
+
+        main_layout.addWidget(sort_frame)
+
+        # Main content area - use QSplitter for resizable split
+        self.splitter = QSplitter(Qt.Orientation.Vertical)
+        self.splitter.setStyleSheet(f"""
+            QSplitter::handle {{
+                background-color: {colors['separator']};
+                height: 4px;
+            }}
+        """)
 
         # =====================================================================
         # TOP PANE: Regular Projects Summary
         # =====================================================================
-        top_frame = ctk.CTkFrame(self.paned, fg_color=colors["container_bg"])
+        top_frame = QFrame()
+        top_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors['container_bg']};
+                border-radius: 8px;
+            }}
+        """)
+        top_layout = QVBoxLayout(top_frame)
+        top_layout.setContentsMargins(10, 10, 10, 10)
+        top_layout.setSpacing(5)
 
-        ctk.CTkLabel(top_frame, text="Projects", font=ctk.CTkFont(family=FONT_FAMILY, weight="bold")).pack(anchor="w", padx=10, pady=5)
+        projects_label = QLabel("Projects")
+        projects_label.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        projects_label.setStyleSheet(f"color: {colors['text_primary']};")
+        top_layout.addWidget(projects_label)
 
-        self.table_container = ctk.CTkFrame(top_frame, fg_color="transparent")
-        self.table_container.pack(fill=ctk.BOTH, expand=True, padx=10)
+        # Stacked widget for project tables
+        self.table_stack = QStackedWidget()
+        top_layout.addWidget(self.table_stack, 1)
 
         # Tables will be created lazily on first refresh
         self.table = None
+        self.table_standard = None
         self.table_weekly = None
         self.table_monthly = None
 
         # Project total label
-        self.project_total_var = ctk.StringVar(value="Projects Total: 0h 00m")
-        project_total_label = ctk.CTkLabel(top_frame, textvariable=self.project_total_var, font=ctk.CTkFont(family=FONT_FAMILY, weight="bold"))
-        project_total_label.pack(pady=3)
+        self.project_total_label = QLabel("Projects Total: 0h 00m")
+        self.project_total_label.setFont(QFont(FONT_FAMILY, 11, QFont.Weight.Bold))
+        self.project_total_label.setStyleSheet(f"color: {colors['text_primary']};")
+        self.project_total_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        top_layout.addWidget(self.project_total_label)
 
         # =====================================================================
         # BOTTOM PANE: Background Tasks Summary
         # =====================================================================
-        bottom_frame = ctk.CTkFrame(self.paned, fg_color=colors["container_bg"])
+        bottom_frame = QFrame()
+        bottom_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors['container_bg']};
+                border-radius: 8px;
+            }}
+        """)
+        bottom_layout = QVBoxLayout(bottom_frame)
+        bottom_layout.setContentsMargins(10, 10, 10, 10)
+        bottom_layout.setSpacing(5)
 
-        ctk.CTkLabel(bottom_frame, text="Background Tasks", font=ctk.CTkFont(family=FONT_FAMILY, weight="bold")).pack(anchor="w", padx=10, pady=5)
+        bg_tasks_label = QLabel("Background Tasks")
+        bg_tasks_label.setFont(QFont(FONT_FAMILY, 12, QFont.Weight.Bold))
+        bg_tasks_label.setStyleSheet(f"color: {colors['text_primary']};")
+        bottom_layout.addWidget(bg_tasks_label)
 
-        self.bg_table_container = ctk.CTkFrame(bottom_frame, fg_color="transparent")
-        self.bg_table_container.pack(fill=ctk.BOTH, expand=True, padx=10)
+        # Stacked widget for background task tables
+        self.bg_table_stack = QStackedWidget()
+        bottom_layout.addWidget(self.bg_table_stack, 1)
 
         # Background task tables will be created lazily on first refresh
         self.bg_table = None
+        self.bg_table_standard = None
         self.bg_table_weekly = None
         self.bg_table_monthly = None
 
         # Background tasks total label
-        self.bg_total_var = ctk.StringVar(value="Tasks Total: 0h 00m")
-        bg_total_label = ctk.CTkLabel(bottom_frame, textvariable=self.bg_total_var, font=ctk.CTkFont(family=FONT_FAMILY, weight="bold"))
-        bg_total_label.pack(pady=3)
+        self.bg_total_label = QLabel("Tasks Total: 0h 00m")
+        self.bg_total_label.setFont(QFont(FONT_FAMILY, 11, QFont.Weight.Bold))
+        self.bg_total_label.setStyleSheet(f"color: {colors['text_primary']};")
+        self.bg_total_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        bottom_layout.addWidget(self.bg_total_label)
 
-        # Add frames to paned window with weight for initial sizing
-        self.paned.add(top_frame, weight=2)
-        self.paned.add(bottom_frame, weight=1)
+        # Add frames to splitter
+        self.splitter.addWidget(top_frame)
+        self.splitter.addWidget(bottom_frame)
+        self.splitter.setStretchFactor(0, 2)  # Projects: 2 parts
+        self.splitter.setStretchFactor(1, 1)  # Background: 1 part
+
+        main_layout.addWidget(self.splitter, 1)
 
         # Combined total at bottom
-        self.total_var = ctk.StringVar(value="Combined Total: 0h 00m")
-        total_label = ctk.CTkLabel(self.frame, textvariable=self.total_var, font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"))
-        total_label.pack(pady=5)
+        self.total_label = QLabel("Combined Total: 0h 00m")
+        self.total_label.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
+        self.total_label.setStyleSheet(f"color: {colors['text_primary']};")
+        self.total_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(self.total_label)
+
+    def _on_period_change(self, value: str):
+        """Handle period selection change."""
+        self.period_var = value
+        self.refresh()
+
+    def _on_sort_change(self, value: str):
+        """Handle sort selection change."""
+        self.sort_var = value
+        self.refresh()
+
+    def _on_group_change(self, state: int):
+        """Handle group checkbox change."""
+        self.group_var = state == Qt.CheckState.Checked.value
+        self.refresh()
 
     def _initialize_tables(self):
         """Create all three table variants for both projects and background tasks."""
@@ -163,33 +371,36 @@ class SummaryTab:
         # Standard view table (for today/all time)
         show_row_dividers = db.get_setting("show_row_dividers", "1") == "1"
         self.table_standard = CTkTable(
-            self.table_container,
+            self.table_stack,
             columns=["Project", "Priority", "Tags", "Time", "Hours"],
             widths=[160, 50, 260, 90, 70],
             anchors=['w', 'w', 'w', 'w', 'w'],
             show_header=True,
             show_dividers=show_row_dividers
         )
+        self.table_stack.addWidget(self.table_standard)
 
         # Weekly view table (placeholder columns, will be updated dynamically)
         self.table_weekly = CTkTable(
-            self.table_container,
+            self.table_stack,
             columns=["Project", "Priority", "Tags", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Total"],
-            widths=[100, 50, 200, 50, 50, 50, 50, 50, 50, 50, 55],
+            widths=[160, 70, 220, 70, 70, 70, 70, 70, 70, 70, 75],
             anchors=['w'] + ['w'] * 10,
             show_header=True,
             show_dividers=show_row_dividers
         )
+        self.table_stack.addWidget(self.table_weekly)
 
         # Monthly view table (placeholder columns, will be updated dynamically)
         self.table_monthly = CTkTable(
-            self.table_container,
+            self.table_stack,
             columns=["Project", "Priority", "Tags", "1-5", "6-10", "11-15", "16-20", "21-25", "26-31", "Total"],
-            widths=[100, 50, 200, 50, 50, 50, 50, 50, 50, 55],
+            widths=[160, 70, 220, 70, 70, 70, 70, 70, 70, 75],
             anchors=['w'] + ['w'] * 9,
             show_header=True,
             show_dividers=show_row_dividers
         )
+        self.table_stack.addWidget(self.table_monthly)
 
         # =====================================================================
         # BACKGROUND TASK TABLES
@@ -197,33 +408,36 @@ class SummaryTab:
 
         # Standard view table
         self.bg_table_standard = CTkTable(
-            self.bg_table_container,
+            self.bg_table_stack,
             columns=["Task", "Time", "Hours"],
             widths=[250, 120, 100],
             anchors=['w', 'w', 'w'],
             show_header=True,
             show_dividers=show_row_dividers
         )
+        self.bg_table_stack.addWidget(self.bg_table_standard)
 
         # Weekly view table
         self.bg_table_weekly = CTkTable(
-            self.bg_table_container,
+            self.bg_table_stack,
             columns=["Task", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Total"],
-            widths=[120, 55, 55, 55, 55, 55, 55, 55, 60],
+            widths=[140, 75, 75, 75, 75, 75, 75, 75, 80],
             anchors=['w'] + ['w'] * 8,
             show_header=True,
             show_dividers=show_row_dividers
         )
+        self.bg_table_stack.addWidget(self.bg_table_weekly)
 
         # Monthly view table
         self.bg_table_monthly = CTkTable(
-            self.bg_table_container,
+            self.bg_table_stack,
             columns=["Task", "1-5", "6-10", "11-15", "16-20", "21-25", "26-31", "Total"],
-            widths=[120, 55, 55, 55, 55, 55, 55, 60],
+            widths=[140, 75, 75, 75, 75, 75, 75, 80],
             anchors=['w'] + ['w'] * 7,
             show_header=True,
             show_dividers=show_row_dividers
         )
+        self.bg_table_stack.addWidget(self.bg_table_monthly)
 
         # Set default active tables
         self.table = self.table_standard
@@ -247,47 +461,17 @@ class SummaryTab:
             self.bg_table_monthly.show_dividers = show_row_dividers
 
     def _show_table_view(self, view: str):
-        """Show the specified project table and hide others."""
-        # Unpack all tables (use getattr to handle case where tables aren't created yet)
-        if getattr(self, 'table_standard', None):
-            self.table_standard.pack_forget()
-        if getattr(self, 'table_weekly', None):
-            self.table_weekly.pack_forget()
-        if getattr(self, 'table_monthly', None):
-            self.table_monthly.pack_forget()
-
-        # Pack the requested table
-        if view == "standard":
-            self.table = self.table_standard
-        elif view == "weekly":
-            self.table = self.table_weekly
-        elif view == "monthly":
-            self.table = self.table_monthly
-
-        if self.table:
-            self.table.pack(fill=ctk.BOTH, expand=True)
+        """Show the specified project table using QStackedWidget."""
+        view_index = {"standard": 0, "weekly": 1, "monthly": 2}.get(view, 0)
+        self.table_stack.setCurrentIndex(view_index)
+        self.table = [self.table_standard, self.table_weekly, self.table_monthly][view_index]
         self.current_view = view
 
     def _show_bg_table_view(self, view: str):
-        """Show the specified background task table and hide others."""
-        # Unpack all tables (use getattr to handle case where tables aren't created yet)
-        if getattr(self, 'bg_table_standard', None):
-            self.bg_table_standard.pack_forget()
-        if getattr(self, 'bg_table_weekly', None):
-            self.bg_table_weekly.pack_forget()
-        if getattr(self, 'bg_table_monthly', None):
-            self.bg_table_monthly.pack_forget()
-
-        # Pack the requested table
-        if view == "standard":
-            self.bg_table = self.bg_table_standard
-        elif view == "weekly":
-            self.bg_table = self.bg_table_weekly
-        elif view == "monthly":
-            self.bg_table = self.bg_table_monthly
-
-        if self.bg_table:
-            self.bg_table.pack(fill=ctk.BOTH, expand=True)
+        """Show the specified background task table using QStackedWidget."""
+        view_index = {"standard": 0, "weekly": 1, "monthly": 2}.get(view, 0)
+        self.bg_table_stack.setCurrentIndex(view_index)
+        self.bg_table = [self.bg_table_standard, self.bg_table_weekly, self.bg_table_monthly][view_index]
         self.bg_current_view = view
 
     def _update_weekly_columns(self, week_start: datetime):
@@ -367,7 +551,7 @@ class SummaryTab:
         # Update divider settings on all tables (in case setting changed)
         self._update_table_divider_settings()
 
-        period = self.period_var.get()
+        period = self.period_var
 
         # Calculate date range
         start_date = None
@@ -394,7 +578,7 @@ class SummaryTab:
             days_in_month = calendar.monthrange(start_date.year, start_date.month)[1]
             end_date = start_date + timedelta(days=days_in_month)
 
-        # Switch view type if needed (show/hide tables instead of destroy/create)
+        # Switch view type if needed (using QStackedWidget)
         if period == "week":
             if self.current_view != "weekly":
                 self._show_table_view("weekly")
@@ -416,13 +600,13 @@ class SummaryTab:
 
     def _refresh_standard(self, start_date, end_date):
         """Refresh with standard (non-weekly) view."""
-        sort_by = self.sort_var.get()
-        group_by = self.group_var.get()
+        sort_by = self.sort_var
+        group_by = self.group_var
 
         # Use batch_update to defer painting for both tables
-        with batch_update(self.table_container):
-            with batch_update(self.bg_table_container):
-                self._refresh_standard_inner(start_date, end_date, sort_by, group_by)
+        # (parent widget covers all descendants, no need to nest)
+        with batch_update(self.splitter):
+            self._refresh_standard_inner(start_date, end_date, sort_by, group_by)
 
     def _refresh_standard_inner(self, start_date, end_date, sort_by, group_by):
         """Inner refresh logic for standard view (called within batch_update)."""
@@ -586,26 +770,26 @@ class SummaryTab:
         # Update totals
         proj_h = project_total_seconds // 3600
         proj_m = (project_total_seconds % 3600) // 60
-        self.project_total_var.set(f"Projects Total: {proj_h}h {proj_m:02d}m ({round(project_total_seconds/3600, 2)} hours)")
+        self.project_total_label.setText(f"Projects Total: {proj_h}h {proj_m:02d}m ({round(project_total_seconds/3600, 2)} hours)")
 
         bg_h = bg_total_seconds // 3600
         bg_m = (bg_total_seconds % 3600) // 60
-        self.bg_total_var.set(f"Tasks Total: {bg_h}h {bg_m:02d}m ({round(bg_total_seconds/3600, 2)} hours)")
+        self.bg_total_label.setText(f"Tasks Total: {bg_h}h {bg_m:02d}m ({round(bg_total_seconds/3600, 2)} hours)")
 
         combined = project_total_seconds + bg_total_seconds
         comb_h = combined // 3600
         comb_m = (combined % 3600) // 60
-        self.total_var.set(f"Combined Total: {comb_h}h {comb_m:02d}m ({round(combined/3600, 2)} hours)")
+        self.total_label.setText(f"Combined Total: {comb_h}h {comb_m:02d}m ({round(combined/3600, 2)} hours)")
 
     def _refresh_weekly(self, start_date: datetime, end_date: datetime):
         """Refresh with weekly day-by-day view."""
-        sort_by = self.sort_var.get()
-        group_by = self.group_var.get()
+        sort_by = self.sort_var
+        group_by = self.group_var
 
         # Use batch_update to defer painting for both tables
-        with batch_update(self.table_container):
-            with batch_update(self.bg_table_container):
-                self._refresh_weekly_inner(start_date, end_date, sort_by, group_by)
+        # (parent widget covers all descendants, no need to nest)
+        with batch_update(self.splitter):
+            self._refresh_weekly_inner(start_date, end_date, sort_by, group_by)
 
     def _refresh_weekly_inner(self, start_date: datetime, end_date: datetime, sort_by, group_by):
         """Inner refresh logic for weekly view (called within batch_update)."""
@@ -618,13 +802,13 @@ class SummaryTab:
             first_col = "Tag" if sort_by == "tag" else "Priority"
             self.table_weekly.update_columns(
                 columns=[first_col, "", ""] + day_headings_base + ["Total"],
-                widths=[80, 0, 0, 50, 50, 50, 50, 50, 50, 50, 55],
+                widths=[100, 0, 0, 70, 70, 70, 70, 70, 70, 70, 75],
                 anchors=['w'] + ['w'] * 10
             )
         else:
             self.table_weekly.update_columns(
                 columns=["Project", "Priority", "Tags"] + day_headings_base + ["Total"],
-                widths=[100, 50, 200, 50, 50, 50, 50, 50, 50, 50, 55],
+                widths=[160, 70, 220, 70, 70, 70, 70, 70, 70, 70, 75],
                 anchors=['w'] + ['w'] * 10
             )
 
@@ -804,27 +988,27 @@ class SummaryTab:
         # Update totals
         proj_h = project_total_seconds // 3600
         proj_m = (project_total_seconds % 3600) // 60
-        self.project_total_var.set(f"Projects Total: {proj_h}h {proj_m:02d}m ({round(project_total_seconds/3600, 2)} hours)")
+        self.project_total_label.setText(f"Projects Total: {proj_h}h {proj_m:02d}m ({round(project_total_seconds/3600, 2)} hours)")
 
         bg_h = bg_total_seconds // 3600
         bg_m = (bg_total_seconds % 3600) // 60
-        self.bg_total_var.set(f"Tasks Total: {bg_h}h {bg_m:02d}m ({round(bg_total_seconds/3600, 2)} hours)")
+        self.bg_total_label.setText(f"Tasks Total: {bg_h}h {bg_m:02d}m ({round(bg_total_seconds/3600, 2)} hours)")
 
         combined = project_total_seconds + bg_total_seconds
         comb_h = combined // 3600
         comb_m = (combined % 3600) // 60
-        self.total_var.set(f"Combined Total: {comb_h}h {comb_m:02d}m ({round(combined/3600, 2)} hours)")
+        self.total_label.setText(f"Combined Total: {comb_h}h {comb_m:02d}m ({round(combined/3600, 2)} hours)")
 
     def _refresh_monthly(self, start_date: datetime, end_date: datetime):
         """Refresh with monthly 5-day period view."""
         import calendar
-        sort_by = self.sort_var.get()
-        group_by = self.group_var.get()
+        sort_by = self.sort_var
+        group_by = self.group_var
 
         # Use batch_update to defer painting for both tables
-        with batch_update(self.table_container):
-            with batch_update(self.bg_table_container):
-                self._refresh_monthly_inner(start_date, end_date, sort_by, group_by)
+        # (parent widget covers all descendants, no need to nest)
+        with batch_update(self.splitter):
+            self._refresh_monthly_inner(start_date, end_date, sort_by, group_by)
 
     def _refresh_monthly_inner(self, start_date: datetime, end_date: datetime, sort_by, group_by):
         """Inner refresh logic for monthly view (called within batch_update)."""
@@ -839,13 +1023,13 @@ class SummaryTab:
             first_col = "Tag" if sort_by == "tag" else "Priority"
             self.table_monthly.update_columns(
                 columns=[first_col, "", ""] + period_headings_base + ["Total"],
-                widths=[80, 0, 0, 50, 50, 50, 50, 50, 50, 55],
+                widths=[100, 0, 0, 70, 70, 70, 70, 70, 70, 75],
                 anchors=['w'] + ['w'] * 9
             )
         else:
             self.table_monthly.update_columns(
                 columns=["Project", "Priority", "Tags"] + period_headings_base + ["Total"],
-                widths=[100, 50, 200, 50, 50, 50, 50, 50, 50, 55],
+                widths=[160, 70, 220, 70, 70, 70, 70, 70, 70, 75],
                 anchors=['w'] + ['w'] * 9
             )
 
@@ -1051,13 +1235,13 @@ class SummaryTab:
         # Update totals
         proj_h = project_total_seconds // 3600
         proj_m = (project_total_seconds % 3600) // 60
-        self.project_total_var.set(f"Projects Total: {proj_h}h {proj_m:02d}m ({round(project_total_seconds/3600, 2)} hours)")
+        self.project_total_label.setText(f"Projects Total: {proj_h}h {proj_m:02d}m ({round(project_total_seconds/3600, 2)} hours)")
 
         bg_h = bg_total_seconds // 3600
         bg_m = (bg_total_seconds % 3600) // 60
-        self.bg_total_var.set(f"Tasks Total: {bg_h}h {bg_m:02d}m ({round(bg_total_seconds/3600, 2)} hours)")
+        self.bg_total_label.setText(f"Tasks Total: {bg_h}h {bg_m:02d}m ({round(bg_total_seconds/3600, 2)} hours)")
 
         combined = project_total_seconds + bg_total_seconds
         comb_h = combined // 3600
         comb_m = (combined % 3600) // 60
-        self.total_var.set(f"Combined Total: {comb_h}h {comb_m:02d}m ({round(combined/3600, 2)} hours)")
+        self.total_label.setText(f"Combined Total: {comb_h}h {comb_m:02d}m ({round(combined/3600, 2)} hours)")

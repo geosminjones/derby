@@ -2,20 +2,25 @@
 """
 gui.py - Graphical user interface for Derby
 
-A CustomTkinter-based GUI that provides the same functionality as the CLI
+A PyQt6-based GUI that provides the same functionality as the CLI
 but with a visual interface and live timer updates.
 
 Run with: python gui.py
 """
 
-import tkinter as tk
-from tkinter import filedialog
-import customtkinter as ctk
+import sys
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QFrame, QLabel, QPushButton, QMenuBar, QMenu, QFileDialog,
+    QStackedWidget
+)
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont, QAction, QIcon
 
 import db
 import themes
 from themes import FONT_FAMILY
-from gui_utils import batch_update
+from jframes import TabButton, TabSwitcher, batch_update, MessageBox, ConfirmDialog
 
 # Import tab components
 from timer_tab import TimerTab, LogSessionDialog
@@ -23,123 +28,165 @@ from history_tab import HistoryTab
 from summary_tab import SummaryTab
 from projects_tab import ProjectsTab
 from appearance_tab import AppearanceTab
-from dialogs import CTkMessagebox, CTkConfirmDialog
 
 
-class DerbyApp:
+class DerbyApp(QMainWindow):
     """Main application window."""
 
     def __init__(self):
-        self.root = ctk.CTk()
-        self.root.title("Derby")
-        self.root.geometry("850x550")
-        self.root.minsize(700, 450)
+        super().__init__()
+
+        self.setWindowTitle("Derby")
+        self.setWindowIcon(QIcon("jockey.ico"))
+        self.setGeometry(100, 100, 850, 550)
+        self.setMinimumSize(700, 450)
 
         # Initialize database
         db.init_database()
 
-        # Load saved theme and apply TTK styles
+        # Load saved theme
         themes.load_saved_theme()
-        self.ttk_style = tk.ttk.Style()
-        themes.apply_ttk_styles(self.ttk_style)
 
-        # Apply theme colors to root
+        # Apply theme colors
         colors = themes.get_colors()
-        self.root.configure(fg_color=colors["bg_dark"])
-
-        # Status bar variable
-        self.status_var = ctk.StringVar(value="Ready")
+        self.setStyleSheet(f"background-color: {colors['bg_dark']};")
 
         # Build UI components
         self._create_menu()
-        self._create_tabview()
+        self._create_main_ui()
         self._create_status_bar()
 
         # Start timer update loop
-        self._schedule_timer_update()
-
-        # Handle window close
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._update_timers)
+        self.timer.start(1000)
 
     def _create_menu(self):
-        """Create application menu bar using tkinter Menu (CustomTkinter doesn't have native menu)."""
-        menu_style = {
-            "bg": themes.get_colors()["bg_dark"],
-            "fg": themes.get_colors()["text_primary"],
-            "activebackground": themes.get_colors()["bg_light"],
-            "activeforeground": themes.get_colors()["text_primary"],
-            "font": (FONT_FAMILY, 10)
-        }
-        menubar = tk.Menu(self.root, **menu_style)
-        self.root.configure(menu=menubar)
+        """Create application menu bar."""
+        colors = themes.get_colors()
+
+        menubar = self.menuBar()
+        menubar.clear()
+        menubar.setStyleSheet(f"""
+            QMenuBar {{
+                background-color: {colors['bg_dark']};
+                color: {colors['text_primary']};
+            }}
+            QMenuBar::item:selected {{
+                background-color: {colors['bg_light']};
+            }}
+            QMenu {{
+                background-color: {colors['bg_dark']};
+                color: {colors['text_primary']};
+            }}
+            QMenu::item:selected {{
+                background-color: {colors['bg_light']};
+            }}
+        """)
 
         # File menu
-        file_menu = tk.Menu(menubar, tearoff=0, **menu_style)
-        menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="Export to CSV...", command=self._export_csv)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self._on_close)
+        file_menu = menubar.addMenu("File")
+
+        export_action = QAction("Export to CSV...", self)
+        export_action.triggered.connect(self._export_csv)
+        file_menu.addAction(export_action)
+
+        file_menu.addSeparator()
+
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
 
         # Session menu
-        session_menu = tk.Menu(menubar, tearoff=0, **menu_style)
-        menubar.add_cascade(label="Session", menu=session_menu)
-        session_menu.add_command(label="Log Manual Entry...", command=self._show_log_dialog)
-        session_menu.add_command(label="Stop All", command=self._stop_all)
+        session_menu = menubar.addMenu("Session")
+
+        log_action = QAction("Log Manual Entry...", self)
+        log_action.triggered.connect(self._show_log_dialog)
+        session_menu.addAction(log_action)
+
+        stop_all_action = QAction("Stop All", self)
+        stop_all_action.triggered.connect(self._stop_all)
+        session_menu.addAction(stop_all_action)
 
         # Help menu
-        help_menu = tk.Menu(menubar, tearoff=0, **menu_style)
-        menubar.add_cascade(label="Help", menu=help_menu)
-        help_menu.add_command(label="About", command=self._show_about)
+        help_menu = menubar.addMenu("Help")
 
-    def _create_tabview(self):
-        """Create tabbed interface with tab switcher inside the main container."""
-        # Main container frame (the gray box)
-        self.main_container = ctk.CTkFrame(self.root, fg_color=themes.get_colors()["bg_dark"])
-        self.main_container.pack(fill=ctk.BOTH, expand=True, padx=5, pady=5)
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self._show_about)
+        help_menu.addAction(about_action)
+
+    def _create_main_ui(self):
+        """Create the main UI with tab switcher and content area."""
+        colors = themes.get_colors()
+
+        # Central widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(5, 5, 5, 5)
+        main_layout.setSpacing(5)
+
+        # Main container
+        self.main_container = QFrame()
+        self.main_container.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors['bg_dark']};
+                border-radius: 8px;
+            }}
+        """)
+        main_layout.addWidget(self.main_container)
+
+        container_layout = QVBoxLayout(self.main_container)
+        container_layout.setContentsMargins(10, 10, 10, 10)
+        container_layout.setSpacing(5)
 
         # Header row with tab switcher and Stop All button
-        header_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
-        header_frame.pack(fill=ctk.X, padx=10, pady=(10, 5))
+        header_frame = QFrame()
+        header_frame.setStyleSheet("background: transparent;")
+        header_layout = QHBoxLayout(header_frame)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(10)
 
-        # Tab switcher (segmented button) on the left
-        self.tab_var = ctk.StringVar(value="Timer")
-        self.tab_switcher = ctk.CTkSegmentedButton(
-            header_frame,
-            values=["Timer", "History", "Summary", "Projects", "Settings"],
-            variable=self.tab_var,
-            command=self._on_tab_change,
-            fg_color=themes.get_colors()["container_bg"],
-            selected_color=themes.get_colors()["bg_light"],
-            selected_hover_color=themes.get_colors()["bg_light"],
-            unselected_color=themes.get_colors()["container_bg"],
-            unselected_hover_color=themes.get_colors()["separator"],
-            text_color=themes.get_colors()["text_primary"],
-            text_color_disabled=themes.get_colors()["text_secondary"]
-        )
-        self.tab_switcher.pack(side=ctk.LEFT)
+        # Tab switcher
+        self.tab_switcher = TabSwitcher(["Timer", "Summary", "History", "Projects", "Settings"])
+        self.tab_switcher.set_on_tab_change(self._on_tab_change)
+        header_layout.addWidget(self.tab_switcher)
 
-        # Stop All button on the right
-        self.stop_all_btn = ctk.CTkButton(header_frame, text="Stop All", command=self._stop_all, width=100)
-        self.stop_all_btn.pack(side=ctk.RIGHT)
+        header_layout.addStretch()
 
-        # Content frame for tab contents
-        self.content_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
-        self.content_frame.pack(fill=ctk.BOTH, expand=True)
+        # Stop All button
+        self.stop_all_btn = QPushButton("Stop All")
+        self.stop_all_btn.setFixedSize(100, 32)
+        self.stop_all_btn.setFont(QFont(FONT_FAMILY, 11))
+        self.stop_all_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors['danger']};
+                color: white;
+                border: none;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors['danger_hover']};
+            }}
+        """)
+        self.stop_all_btn.clicked.connect(self._stop_all)
+        header_layout.addWidget(self.stop_all_btn)
 
-        # Configure grid to allow tab frames to fill the space
-        self.content_frame.grid_rowconfigure(0, weight=1)
-        self.content_frame.grid_columnconfigure(0, weight=1)
+        container_layout.addWidget(header_frame)
 
-        # Create individual tab frames (all stacked in same grid cell)
+        # Content frame (stacked widget for tabs)
+        self.content_stack = QStackedWidget()
+        self.content_stack.setStyleSheet("background: transparent;")
+        container_layout.addWidget(self.content_stack)
+
+        # Create tab frames
         self.tab_frames = {}
-        for tab_name in ["Timer", "History", "Summary", "Projects", "Settings"]:
-            frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
-            frame.grid(row=0, column=0, sticky="nsew")
+        for tab_name in ["Timer", "Summary", "History", "Projects", "Settings"]:
+            frame = QFrame()
+            frame.setStyleSheet("background: transparent;")
             self.tab_frames[tab_name] = frame
-
-        # Raise Timer tab to top by default
-        self.tab_frames["Timer"].tkraise()
-        self.current_tab = "Timer"
+            self.content_stack.addWidget(frame)
 
         # Create tab content
         self.timer_tab = TimerTab(self.tab_frames["Timer"], self)
@@ -148,23 +195,22 @@ class DerbyApp:
         self.projects_tab = ProjectsTab(self.tab_frames["Projects"], self)
         self.settings_tab = AppearanceTab(self.tab_frames["Settings"], self)
 
+        self.current_tab = "Timer"
+
     def _create_status_bar(self):
         """Create status bar at bottom of window."""
-        status_frame = ctk.CTkFrame(self.root, height=30, fg_color=themes.get_colors()["bg_dark"])
-        status_frame.pack(fill=ctk.X, side=ctk.BOTTOM)
-        status_frame.pack_propagate(False)
+        colors = themes.get_colors()
 
-        status_label = ctk.CTkLabel(
-            status_frame,
-            textvariable=self.status_var,
-            anchor="w"
-        )
-        status_label.pack(fill=ctk.X, padx=10, pady=5)
-
-    def _schedule_timer_update(self):
-        """Schedule periodic timer updates."""
-        self._update_timers()
-        self.root.after(1000, self._schedule_timer_update)
+        status_bar = self.statusBar()
+        status_bar.setStyleSheet(f"""
+            QStatusBar {{
+                background-color: {colors['bg_dark']};
+                color: {colors['text_secondary']};
+            }}
+        """)
+        status_bar.setFont(QFont(FONT_FAMILY, 10))
+        self.status_message = "Ready"
+        status_bar.showMessage(self.status_message)
 
     def _update_timers(self):
         """Update all active session durations."""
@@ -174,11 +220,11 @@ class DerbyApp:
         # Update status bar
         active = db.get_active_sessions()
         if not active:
-            self.status_var.set("Idle - No active sessions")
+            self.status_message = "Idle - No active sessions"
         elif len(active) == 1:
             s = active[0]
             paused_indicator = " [PAUSED]" if s.is_paused else ""
-            self.status_var.set(f"Tracking: {s.project_name} ({s.format_duration()}){paused_indicator}")
+            self.status_message = f"Tracking: {s.project_name} ({s.format_duration()}){paused_indicator}"
         else:
             total = sum(s.duration_seconds for s in active)
             paused_count = sum(1 for s in active if s.is_paused)
@@ -186,76 +232,67 @@ class DerbyApp:
             m = (total % 3600) // 60
             sec = total % 60
             paused_indicator = f" [{paused_count} paused]" if paused_count > 0 else ""
-            self.status_var.set(f"Tracking: {len(active)} sessions (Total: {h}h {m:02d}m {sec:02d}s){paused_indicator}")
+            self.status_message = f"Tracking: {len(active)} sessions (Total: {h}h {m:02d}m {sec:02d}s){paused_indicator}"
 
-    def _on_tab_change(self, tab_name: str = None):
+        self.statusBar().showMessage(self.status_message)
+
+    def _on_tab_change(self, tab_name: str):
         """Switch to a different tab and refresh its data."""
-        if tab_name is None:
-            tab_name = self.tab_var.get()
+        # Switch to the selected tab
+        tab_index = list(self.tab_frames.keys()).index(tab_name)
+        self.content_stack.setCurrentIndex(tab_index)
+        self.current_tab = tab_name
 
-        # Wrap the entire tab switch in batch_update to prevent flicker
-        # This hides the content frame while switching and refreshing
-        with batch_update(self.content_frame):
-            # Raise the selected tab to the front
-            self.tab_frames[tab_name].tkraise()
-            self.current_tab = tab_name
-
-            # Refresh the tab data
-            if tab_name == "Timer":
-                self.timer_tab.refresh()
-            elif tab_name == "History":
-                self.history_tab.refresh()
-            elif tab_name == "Summary":
-                self.summary_tab.refresh()
-            elif tab_name == "Projects":
-                self.projects_tab.refresh()
-            elif tab_name == "Settings":
-                self.settings_tab.refresh()
+        # Refresh the tab data
+        if tab_name == "Timer":
+            self.timer_tab.refresh()
+        elif tab_name == "History":
+            self.history_tab.refresh()
+        elif tab_name == "Summary":
+            self.summary_tab.refresh()
+        elif tab_name == "Projects":
+            self.projects_tab.refresh()
+        elif tab_name == "Settings":
+            self.settings_tab.refresh()
 
     def _export_csv(self):
         """Export sessions to CSV file."""
-        filepath = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-            initialfile="timetrack_export.csv"
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export to CSV",
+            "timetrack_export.csv",
+            "CSV files (*.csv);;All files (*.*)"
         )
         if filepath:
             db.export_sessions_csv(filepath)
-            CTkMessagebox(self.root, "Export Complete", f"Exported to:\n{filepath}", "info")
+            MessageBox(self, "Export Complete", f"Exported to:\n{filepath}", "info")
 
     def _stop_all(self):
         """Stop all active sessions."""
         active = db.get_active_sessions()
         if not active:
-            CTkMessagebox(self.root, "Info", "No active sessions to stop", "info")
+            MessageBox(self, "Info", "No active sessions to stop", "info")
             return
 
-        if CTkConfirmDialog(self.root, "Confirm", f"Stop {len(active)} active session(s)?").get_result():
+        dialog = ConfirmDialog(self, "Confirm", f"Stop {len(active)} active session(s)?")
+        if dialog.get_result():
             db.stop_all_sessions()
             self.timer_tab.refresh()
 
     def _show_log_dialog(self):
         """Show dialog to log manual entry."""
-        LogSessionDialog(self.root, self)
+        LogSessionDialog(self, self)
 
     def _show_about(self):
         """Show about dialog."""
-        CTkMessagebox(
-            self.root,
+        MessageBox(
+            self,
             "About Derby",
             f"Derby v1.0\n\n"
             f"A simple, local-first time tracking application.\n\n"
             f"Data stored in: {db.get_database_path()}",
             "info"
         )
-
-    def _on_close(self):
-        """Handle window close."""
-        self.root.destroy()
-
-    def run(self):
-        """Start the application main loop."""
-        self.root.mainloop()
 
     # =========================================================================
     # Theme Switching Methods
@@ -265,20 +302,20 @@ class DerbyApp:
         """Capture current UI state before rebuild for theme switching."""
         state = {
             'current_tab': self.current_tab,
-            'geometry': self.root.geometry(),
+            'geometry': self.geometry(),
             'timer': {
-                'project_var': self.timer_tab.project_var.get(),
-                'bg_task_var': self.timer_tab.bg_task_var.get(),
+                'project_var': self.timer_tab.project_var,
+                'bg_task_var': self.timer_tab.bg_task_var,
             },
             'history': {
-                'project_filter': self.history_tab.project_filter.get(),
-                'period_filter': self.history_tab.period_filter.get(),
-                'limit_var': self.history_tab.limit_var.get(),
+                'project_filter': self.history_tab.project_filter,
+                'period_filter': self.history_tab.period_filter,
+                'limit_var': self.history_tab.limit_var,
             },
             'summary': {
-                'period_var': self.summary_tab.period_var.get(),
-                'sort_var': self.summary_tab.sort_var.get(),
-                'group_var': self.summary_tab.group_var.get(),
+                'period_var': self.summary_tab.period_var,
+                'sort_var': self.summary_tab.sort_var,
+                'group_var': self.summary_tab.group_var,
             },
         }
         return state
@@ -286,43 +323,25 @@ class DerbyApp:
     def _restore_ui_state(self, state: dict):
         """Restore UI state after rebuild."""
         # Restore window geometry
-        self.root.geometry(state['geometry'])
+        self.setGeometry(state['geometry'])
 
         # Restore timer tab state
-        self.timer_tab.project_var.set(state['timer']['project_var'])
-        self.timer_tab.bg_task_var.set(state['timer']['bg_task_var'])
+        self.timer_tab.project_var = state['timer']['project_var']
+        self.timer_tab.bg_task_var = state['timer']['bg_task_var']
 
         # Restore history tab state
-        self.history_tab.project_filter.set(state['history']['project_filter'])
-        self.history_tab.period_filter.set(state['history']['period_filter'])
-        self.history_tab.limit_var.set(state['history']['limit_var'])
+        self.history_tab.project_filter = state['history']['project_filter']
+        self.history_tab.period_filter = state['history']['period_filter']
+        self.history_tab.limit_var = state['history']['limit_var']
 
         # Restore summary tab state
-        self.summary_tab.period_var.set(state['summary']['period_var'])
-        self.summary_tab.sort_var.set(state['summary']['sort_var'])
-        self.summary_tab.group_var.set(state['summary']['group_var'])
+        self.summary_tab.period_var = state['summary']['period_var']
+        self.summary_tab.sort_var = state['summary']['sort_var']
+        self.summary_tab.group_var = state['summary']['group_var']
 
-        # Switch to saved tab (this triggers refresh)
-        self.tab_var.set(state['current_tab'])
+        # Switch to saved tab
+        self.tab_switcher.set_current_tab(state['current_tab'])
         self._on_tab_change(state['current_tab'])
-
-    def _rebuild_ui(self):
-        """Destroy and recreate all UI components for theme switching."""
-        # Destroy all child widgets (menu, containers, status bar)
-        for widget in self.root.winfo_children():
-            widget.destroy()
-
-        # Reapply TTK styles with new theme
-        self.ttk_style = tk.ttk.Style()
-        themes.apply_ttk_styles(self.ttk_style)
-
-        # Reset status variable
-        self.status_var = ctk.StringVar(value="Ready")
-
-        # Rebuild UI components
-        self._create_menu()
-        self._create_tabview()
-        self._create_status_bar()
 
     def switch_theme(self, theme_name: str):
         """Switch theme and rebuild UI to apply changes.
@@ -333,12 +352,13 @@ class DerbyApp:
         # Capture current state
         state = self._capture_ui_state()
 
-        # Apply new theme (updates themes module state + CustomTkinter appearance mode)
+        # Apply new theme
         themes.set_theme(theme_name)
         themes.save_theme_preference()
 
-        # Update root window background
-        self.root.configure(fg_color=themes.get_colors()["bg_dark"])
+        # Update styling
+        colors = themes.get_colors()
+        self.setStyleSheet(f"background-color: {colors['bg_dark']};")
 
         # Rebuild UI
         self._rebuild_ui()
@@ -346,66 +366,32 @@ class DerbyApp:
         # Restore state
         self._restore_ui_state(state)
 
+    def _rebuild_ui(self):
+        """Destroy and recreate all UI components for theme switching."""
+        # Remove central widget
+        old_central = self.centralWidget()
+        if old_central:
+            old_central.deleteLater()
 
-class TreeviewFrame(ctk.CTkFrame):
-    """A frame containing a treeview with scrollbar (using tkinter Treeview)."""
+        # Rebuild UI components
+        self._create_menu()
+        self._create_main_ui()
+        self._create_status_bar()
 
-    def __init__(self, parent, columns, headings, widths, height=8, show_scrollbar=True, anchors=None):
-        super().__init__(parent, fg_color=themes.get_colors()["bg_dark"])
 
-        # Create treeview container
-        tree_container = ctk.CTkFrame(self, fg_color="transparent")
-        tree_container.pack(fill=ctk.BOTH, expand=True)
+def main():
+    """Start the application."""
+    app = QApplication(sys.argv)
 
-        # Create treeview (using tkinter since CustomTkinter doesn't have treeview)
-        # TTK styles are configured centrally via themes.apply_ttk_styles()
-        self.tree = tk.ttk.Treeview(tree_container, columns=columns, show="headings", height=height)
+    # Set application-wide font
+    font = QFont(FONT_FAMILY, 11)
+    app.setFont(font)
 
-        # Default anchors to 'w' (left) if not provided
-        if anchors is None:
-            anchors = ['w'] * len(columns)
+    window = DerbyApp()
+    window.show()
 
-        for col, heading, width, anchor in zip(columns, headings, widths, anchors):
-            self.tree.heading(col, text=heading, anchor='center')
-            self.tree.column(col, width=width, anchor=anchor)
-
-        if show_scrollbar:
-            scrollbar = tk.ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.tree.yview)
-            self.tree.configure(yscrollcommand=scrollbar.set)
-            self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        else:
-            self.tree.pack(fill=tk.BOTH, expand=True)
-
-    def clear(self):
-        """Clear all items from the treeview."""
-        children = self.tree.get_children()
-        if children:
-            self.tree.delete(*children)
-
-    def insert(self, values, iid=None, tags=None):
-        """Insert a row into the treeview."""
-        if tags:
-            return self.tree.insert("", tk.END, iid=iid, values=values, tags=tags)
-        return self.tree.insert("", tk.END, iid=iid, values=values)
-
-    def get_selection(self):
-        """Get the current selection."""
-        return self.tree.selection()
-
-    def set(self, item, column, value):
-        """Set a value in a cell."""
-        self.tree.set(item, column, value)
-
-    def get_children(self):
-        """Get all children."""
-        return self.tree.get_children()
-
-    def configure_tag(self, tag_name, **options):
-        """Configure a tag."""
-        self.tree.tag_configure(tag_name, **options)
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
-    app = DerbyApp()
-    app.run()
+    main()

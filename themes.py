@@ -6,10 +6,7 @@ Themes define colors for all UI components.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Optional
-import customtkinter as ctk
-import tkinter as tk
-from tkinter import ttk
+from typing import Callable
 
 
 # Font configuration
@@ -45,8 +42,17 @@ class Theme:
     # Session card colors
     session_active_bg: str    # Active session card background (light green)
     session_paused_bg: str    # Paused session card background (light yellow)
+    session_stopped_bg: str   # Stopped session card background (slightly lighter than bg)
 
-    # CustomTkinter mode
+    # Row selection color
+    row_selected: str         # Selected row background (blue tint)
+
+    # Scrollbar colors
+    scrollbar_track: str          # Track background for opaque contexts
+    scrollbar_thumb: str          # Default thumb color
+    scrollbar_thumb_hover: str    # Hover state for thumb
+
+    # Appearance mode (for compatibility)
     ctk_appearance_mode: str  # "Dark" or "Light"
 
     def to_dict(self) -> dict[str, str]:
@@ -65,6 +71,11 @@ class Theme:
             "success": self.success,
             "session_active_bg": self.session_active_bg,
             "session_paused_bg": self.session_paused_bg,
+            "session_stopped_bg": self.session_stopped_bg,
+            "row_selected": self.row_selected,
+            "scrollbar_track": self.scrollbar_track,
+            "scrollbar_thumb": self.scrollbar_thumb,
+            "scrollbar_thumb_hover": self.scrollbar_thumb_hover,
         }
 
 
@@ -88,6 +99,11 @@ DARK_THEME = Theme(
     success="#27ae60",
     session_active_bg="#1e3a2f",
     session_paused_bg="#3a3520",
+    session_stopped_bg="#2a2a3e",
+    row_selected="#1a2540",
+    scrollbar_track="#1a1a2e",
+    scrollbar_thumb="#4a3a54",
+    scrollbar_thumb_hover="#606060",
     ctk_appearance_mode="Dark"
 )
 
@@ -107,6 +123,11 @@ LIGHT_THEME = Theme(
     success="#27ae60",
     session_active_bg="#d4edda",
     session_paused_bg="#fff3cd",
+    session_stopped_bg="#e8e8e8",
+    row_selected="#cce5ff",
+    scrollbar_track="#e0e0e0",
+    scrollbar_thumb="#c0c0c0",
+    scrollbar_thumb_hover="#a0a0a0",
     ctk_appearance_mode="Light"
 )
 
@@ -126,6 +147,11 @@ BLACK_THEME = Theme(
     success="#228b22",
     session_active_bg="#1a2e1a",
     session_paused_bg="#2e2a1a",
+    session_stopped_bg="#151515",
+    row_selected="#0d1a2a",
+    scrollbar_track="#0d0d0d",
+    scrollbar_thumb="#2a2a2a",
+    scrollbar_thumb_hover="#404040",
     ctk_appearance_mode="Dark"
 )
 
@@ -193,9 +219,6 @@ def set_theme(theme_name: str) -> Theme:
 
     _current_theme = THEMES[theme_name]
 
-    # Update CustomTkinter appearance mode
-    ctk.set_appearance_mode(_current_theme.ctk_appearance_mode)
-
     # Notify all registered callbacks
     _notify_theme_change()
 
@@ -222,51 +245,6 @@ def unregister_theme_callback(callback: Callable[[], None]):
     """
     if callback in _theme_change_callbacks:
         _theme_change_callbacks.remove(callback)
-
-
-def apply_ttk_styles(style: ttk.Style):
-    """
-    Apply current theme to TTK styles.
-
-    Call this after creating the root window and whenever theme changes.
-
-    Args:
-        style: The ttk.Style instance to configure
-    """
-    theme = _current_theme
-
-    style.theme_use("clam")
-
-    style.configure("Treeview",
-        background=theme.bg_medium,
-        foreground=theme.text_primary,
-        fieldbackground=theme.bg_medium,
-        bordercolor=theme.bg_dark,
-        font=(FONT_FAMILY, 10),
-        rowheight=25
-    )
-
-    style.configure("Treeview.Heading",
-        background=theme.bg_light,
-        foreground=theme.text_primary,
-        font=(FONT_FAMILY, 10, "bold")
-    )
-
-    style.map("Treeview",
-        background=[("selected", theme.bg_light)],
-        foreground=[("selected", theme.text_primary)]
-    )
-
-    style.configure("Vertical.TScrollbar",
-        background=theme.bg_medium,
-        troughcolor=theme.bg_dark,
-        arrowcolor=theme.text_primary
-    )
-
-    style.map("Vertical.TScrollbar",
-        background=[("disabled", theme.bg_dark), ("!disabled", theme.bg_medium)],
-        troughcolor=[("disabled", theme.bg_dark), ("!disabled", theme.bg_dark)]
-    )
 
 
 def load_saved_theme() -> Theme:
@@ -308,10 +286,76 @@ def _notify_theme_change():
             print(f"Theme callback error: {e}")
 
 
-# =============================================================================
-# INITIALIZATION
-# =============================================================================
+def get_scrollbar_qss(
+    vertical: bool = True,
+    horizontal: bool = False,
+    transparent_track: bool = False,
+    width: int = 12
+) -> str:
+    """
+    Generate consistent QSS for scrollbar styling.
 
-# Set initial CustomTkinter appearance mode
-ctk.set_appearance_mode(_current_theme.ctk_appearance_mode)
-ctk.set_default_color_theme("blue")
+    Args:
+        vertical: Include vertical scrollbar styling
+        horizontal: Include horizontal scrollbar styling
+        transparent_track: Use transparent track (True) or opaque theme color (False)
+        width: Scrollbar width in pixels
+
+    Returns:
+        QSS string for scrollbar styling
+    """
+    colors = get_colors()
+    track_color = "transparent" if transparent_track else colors["scrollbar_track"]
+    thumb_color = colors["scrollbar_thumb"]
+    thumb_hover = colors["scrollbar_thumb_hover"]
+    border_radius = max(3, width // 3)
+
+    qss_parts = []
+
+    if vertical:
+        qss_parts.append(f"""
+            QScrollBar:vertical {{
+                background-color: {track_color};
+                width: {width}px;
+                border-radius: {border_radius}px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {thumb_color};
+                border-radius: {border_radius}px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {thumb_hover};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+        """)
+
+    if horizontal:
+        qss_parts.append(f"""
+            QScrollBar:horizontal {{
+                background-color: {track_color};
+                height: {width}px;
+                border-radius: {border_radius}px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background-color: {thumb_color};
+                border-radius: {border_radius}px;
+                min-width: 20px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background-color: {thumb_hover};
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: none;
+            }}
+        """)
+
+    return "".join(qss_parts)

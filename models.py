@@ -29,6 +29,25 @@ class Tag:
 
 
 @dataclass
+class PauseEvent:
+    """
+    Represents a pause or resume event for a session.
+
+    When a session is paused and resumed multiple times, each event is recorded
+    so that when the session is stopped, it can be split into discrete segments
+    representing each active work period.
+    """
+    id: Optional[int] = None
+    session_id: int = 0
+    event_type: str = ""  # 'pause' or 'resume'
+    event_time: Optional[datetime] = None
+
+    def __post_init__(self):
+        if self.event_time is None:
+            self.event_time = datetime.now()
+
+
+@dataclass
 class Project:
     """
     Represents a named project/category for time tracking.

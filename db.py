@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 # Import our data models
-from models import Project, Session, Tag
+from models import Project, Session, Tag, PauseEvent
 
 # Default data directory in user's home
 DEFAULT_DATA_DIR = Path.home() / ".timetrack"
@@ -269,6 +269,25 @@ def _migrate_database(conn: sqlite3.Connection):
         """)
 
         _set_schema_version(conn, 4)
+        conn.commit()
+
+    if current_version < 5:
+        cursor = conn.cursor()
+
+        # Create pause_events table to track individual pause/resume events
+        # This enables splitting sessions into discrete segments when stopped
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pause_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pause_events_session ON pause_events(session_id)")
+
+        _set_schema_version(conn, 5)
         conn.commit()
 
 
@@ -1039,19 +1058,22 @@ def get_session_by_id(session_id: int) -> Optional[Session]:
         )
 
 
-def stop_session(project_name: Optional[str] = None, notes: str = "") -> Optional[Session]:
+def stop_session(project_name: Optional[str] = None, notes: str = "") -> list[Session]:
     """
-    Stop an active session.
+    Stop an active session, splitting into multiple sessions for each active period.
 
-    If the session is currently paused, accumulates the final paused time before stopping.
+    When a session has been paused and resumed multiple times, this function
+    creates separate session records for each active work period. Notes are
+    applied only to the final segment.
 
     Args:
         project_name: If provided, stop session for this specific project.
                      If None, stop the most recent active session.
-        notes: Optional description of what you worked on
+        notes: Optional description of what you worked on (applied to final segment)
 
     Returns:
-        The stopped Session, or None if no matching session was active
+        List of created Session objects (one per active period), or empty list
+        if no matching session was active
     """
     # Find the target session
     if project_name:
@@ -1060,79 +1082,153 @@ def stop_session(project_name: Optional[str] = None, notes: str = "") -> Optiona
         active = get_active_session()
 
     if active is None:
-        return None
+        return []
 
     now = datetime.now()
 
-    # If session was paused, accumulate the final paused time
-    final_paused_seconds = active.paused_seconds
-    if active.is_paused and active.pause_started_at:
-        additional_paused = int((now - active.pause_started_at).total_seconds())
-        final_paused_seconds += additional_paused
+    # Get pause events to determine if we need to split
+    events = get_pause_events(active.id)
+
+    # If no pause events, use simple behavior (single session)
+    if not events:
+        # If session was paused (but no events - legacy), accumulate final paused time
+        final_paused_seconds = active.paused_seconds
+        if active.is_paused and active.pause_started_at:
+            additional_paused = int((now - active.pause_started_at).total_seconds())
+            final_paused_seconds += additional_paused
+
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE sessions
+                SET end_time = ?, notes = ?, is_paused = 0, pause_started_at = NULL, paused_seconds = ?
+                WHERE id = ?
+            """, (now.isoformat(), notes, final_paused_seconds, active.id))
+            conn.commit()
+
+        active.end_time = now
+        active.notes = notes
+        active.is_paused = False
+        active.pause_started_at = None
+        active.paused_seconds = final_paused_seconds
+
+        split_sessions_at_midnight()
+        return [active]
+
+    # Compute active periods from pause events
+    periods = get_active_periods(active, end_time=now)
+
+    # If session was paused at stop time (currently paused), the last period
+    # already ends at the pause time, which is correct behavior
+
+    # For sessions with a single period (paused but never resumed)
+    if len(periods) <= 1:
+        # Single period or no periods - simple update
+        period_end = periods[0][1] if periods else now
+
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE sessions
+                SET end_time = ?, notes = ?, is_paused = 0, pause_started_at = NULL, paused_seconds = 0
+                WHERE id = ?
+            """, (period_end.isoformat(), notes, active.id))
+
+            # Clean up pause events
+            cursor.execute("DELETE FROM pause_events WHERE session_id = ?", (active.id,))
+            conn.commit()
+
+        active.end_time = period_end
+        active.notes = notes
+        active.is_paused = False
+        active.pause_started_at = None
+        active.paused_seconds = 0
+
+        split_sessions_at_midnight()
+        return [active]
+
+    # Multiple periods - create separate sessions for each
+    created_sessions = []
 
     with get_connection() as conn:
         cursor = conn.cursor()
 
-        # UPDATE modifies existing rows
-        # SET specifies which columns to change
-        # WHERE ensures we only update the right row
-        cursor.execute("""
-            UPDATE sessions
-            SET end_time = ?, notes = ?, is_paused = 0, pause_started_at = NULL, paused_seconds = ?
-            WHERE id = ?
-        """, (now.isoformat(), notes, final_paused_seconds, active.id))
+        for i, (period_start, period_end) in enumerate(periods):
+            is_final = (i == len(periods) - 1)
+            segment_notes = notes if is_final else ""
 
+            if i == 0:
+                # Update original session to be first period
+                cursor.execute("""
+                    UPDATE sessions
+                    SET end_time = ?, notes = ?, is_paused = 0,
+                        pause_started_at = NULL, paused_seconds = 0
+                    WHERE id = ?
+                """, (period_end.isoformat(), segment_notes, active.id))
+
+                created_sessions.append(Session(
+                    id=active.id,
+                    project_name=active.project_name,
+                    start_time=period_start,
+                    end_time=period_end,
+                    notes=segment_notes,
+                    is_paused=False,
+                    paused_seconds=0,
+                    pause_started_at=None
+                ))
+            else:
+                # Create new session for subsequent periods
+                cursor.execute("""
+                    INSERT INTO sessions (project_name, start_time, end_time, notes,
+                                          is_paused, paused_seconds, pause_started_at)
+                    VALUES (?, ?, ?, ?, 0, 0, NULL)
+                """, (active.project_name, period_start.isoformat(),
+                      period_end.isoformat(), segment_notes))
+
+                new_session_id = cursor.lastrowid
+                created_sessions.append(Session(
+                    id=new_session_id,
+                    project_name=active.project_name,
+                    start_time=period_start,
+                    end_time=period_end,
+                    notes=segment_notes,
+                    is_paused=False,
+                    paused_seconds=0,
+                    pause_started_at=None
+                ))
+
+        # Clean up pause events
+        cursor.execute("DELETE FROM pause_events WHERE session_id = ?", (active.id,))
         conn.commit()
 
-    # Update the in-memory object to reflect the change
-    active.end_time = now
-    active.notes = notes
-    active.is_paused = False
-    active.pause_started_at = None
-    active.paused_seconds = final_paused_seconds
-
-    # Split any sessions that crossed midnight boundaries
     split_sessions_at_midnight()
-
-    return active
+    return created_sessions
 
 
 def stop_all_sessions(notes: str = "") -> list[Session]:
     """
-    Stop ALL currently active sessions.
+    Stop ALL currently active sessions, splitting each into segments if needed.
 
     Args:
-        notes: Optional notes applied to all stopped sessions
+        notes: Optional notes applied to final segment of each stopped session
 
     Returns:
-        List of stopped Session objects
+        List of all created Session objects (may be more than active sessions
+        if some sessions were split into multiple segments)
     """
     active_sessions = get_active_sessions()
 
     if not active_sessions:
         return []
 
-    now = datetime.now()
+    all_created_sessions = []
 
-    with get_connection() as conn:
-        cursor = conn.cursor()
+    # Stop each session using stop_session to handle splitting
+    for session in active_sessions:
+        created = stop_session(project_name=session.project_name, notes=notes)
+        all_created_sessions.extend(created)
 
-        # Stop each session
-        for session in active_sessions:
-            cursor.execute("""
-                UPDATE sessions
-                SET end_time = ?, notes = ?
-                WHERE id = ?
-            """, (now.isoformat(), notes, session.id))
-            session.end_time = now
-            session.notes = notes
-
-        conn.commit()
-
-    # Split any sessions that crossed midnight boundaries
-    split_sessions_at_midnight()
-
-    return active_sessions
+    return all_created_sessions
 
 
 def pause_session(session_id: int) -> Optional[Session]:
@@ -1175,6 +1271,9 @@ def pause_session(session_id: int) -> Optional[Session]:
             )
 
         now = datetime.now()
+
+        # Record the pause event for segment splitting
+        record_pause_event(session_id, 'pause')
 
         cursor.execute("""
             UPDATE sessions
@@ -1236,6 +1335,10 @@ def resume_session(session_id: int) -> Optional[Session]:
             )
 
         now = datetime.now()
+
+        # Record the resume event for segment splitting
+        record_pause_event(session_id, 'resume')
+
         pause_started = datetime.fromisoformat(row["pause_started_at"]) if row["pause_started_at"] else now
         additional_paused = int((now - pause_started).total_seconds())
         new_paused_seconds = (row["paused_seconds"] or 0) + additional_paused
@@ -1258,6 +1361,137 @@ def resume_session(session_id: int) -> Optional[Session]:
             paused_seconds=new_paused_seconds,
             pause_started_at=None
         )
+
+
+# =============================================================================
+# PAUSE EVENT OPERATIONS
+# =============================================================================
+
+def record_pause_event(session_id: int, event_type: str) -> PauseEvent:
+    """
+    Record a pause or resume event for a session.
+
+    Args:
+        session_id: ID of the session
+        event_type: Either 'pause' or 'resume'
+
+    Returns:
+        The created PauseEvent object
+    """
+    now = datetime.now()
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO pause_events (session_id, event_type, event_time)
+            VALUES (?, ?, ?)
+        """, (session_id, event_type, now.isoformat()))
+
+        conn.commit()
+        event_id = cursor.lastrowid
+
+    return PauseEvent(
+        id=event_id,
+        session_id=session_id,
+        event_type=event_type,
+        event_time=now
+    )
+
+
+def get_pause_events(session_id: int) -> list[PauseEvent]:
+    """
+    Get all pause/resume events for a session, ordered by event time.
+
+    Args:
+        session_id: ID of the session
+
+    Returns:
+        List of PauseEvent objects in chronological order
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, session_id, event_type, event_time
+            FROM pause_events
+            WHERE session_id = ?
+            ORDER BY event_time ASC
+        """, (session_id,))
+
+        rows = cursor.fetchall()
+
+        return [
+            PauseEvent(
+                id=row["id"],
+                session_id=row["session_id"],
+                event_type=row["event_type"],
+                event_time=datetime.fromisoformat(row["event_time"])
+            )
+            for row in rows
+        ]
+
+
+def get_active_periods(session: Session, end_time: Optional[datetime] = None) -> list[tuple[datetime, datetime]]:
+    """
+    Compute active work periods from session start_time and pause_events.
+
+    Args:
+        session: The session to compute periods for
+        end_time: The end time to use (defaults to now if session is active)
+
+    Returns:
+        List of (start, end) tuples representing active work periods
+    """
+    if session.start_time is None:
+        return []
+
+    events = get_pause_events(session.id)
+    final_end = end_time or (session.end_time if session.end_time else datetime.now())
+
+    if not events:
+        # No pause events - single continuous period
+        return [(session.start_time, final_end)]
+
+    periods = []
+    current_start = session.start_time
+
+    for event in events:
+        if event.event_type == 'pause':
+            # End current active period at pause time
+            if current_start is not None:
+                periods.append((current_start, event.event_time))
+                current_start = None
+        elif event.event_type == 'resume':
+            # Start new active period at resume time
+            current_start = event.event_time
+
+    # If we're still in an active period (not paused at the end), close it
+    if current_start is not None:
+        periods.append((current_start, final_end))
+
+    return periods
+
+
+def delete_pause_events(session_id: int) -> int:
+    """
+    Delete all pause events for a session.
+
+    Args:
+        session_id: ID of the session
+
+    Returns:
+        Number of events deleted
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM pause_events WHERE session_id = ?", (session_id,))
+        deleted = cursor.rowcount
+
+        conn.commit()
+
+    return deleted
 
 
 def log_session(
