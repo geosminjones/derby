@@ -1,4 +1,4 @@
-# Derby v0.4.2
+# Derby v0.5.0 db1
 
 Derby is a 100% local time-tracking app written in Python with a GUI built in CustomTkinter. It is designed to be feature-competitive with all other time-tracking applications that I have ever used, especially with their paid versions, which I have always felt were subjected to insane markups because of the demand from lawyers. Fortunately, this application should be well-suited for even use by said lawyers, if they can get past the fact that it is built with the last decade's GUI technology, and only built in that way because it's some of the only computer language that I can speak -- and barely, at that. Derby's notable features include:
 
