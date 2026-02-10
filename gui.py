@@ -18,16 +18,16 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QAction, QIcon
 
 import db
-import themes
-from themes import FONT_FAMILY
+import jframes as themes
+from jframes import FONT_FAMILY
 from jframes import TabButton, TabSwitcher, batch_update, MessageBox, ConfirmDialog
 
 # Import tab components
-from timer_tab import TimerTab, LogSessionDialog
-from history_tab import HistoryTab
-from summary_tab import SummaryTab
-from projects_tab import ProjectsTab
-from appearance_tab import AppearanceTab
+from tab_timer import TimerTab, LogSessionDialog
+from tab_history import HistoryTab
+from tab_summary import SummaryTab
+from tab_projects import ProjectsTab
+from tab_settings import AppearanceTab
 
 
 class DerbyApp(QMainWindow):
@@ -189,11 +189,11 @@ class DerbyApp(QMainWindow):
             self.content_stack.addWidget(frame)
 
         # Create tab content
-        self.timer_tab = TimerTab(self.tab_frames["Timer"], self)
-        self.history_tab = HistoryTab(self.tab_frames["History"], self)
-        self.summary_tab = SummaryTab(self.tab_frames["Summary"], self)
-        self.projects_tab = ProjectsTab(self.tab_frames["Projects"], self)
-        self.settings_tab = AppearanceTab(self.tab_frames["Settings"], self)
+        self.tab_timer = TimerTab(self.tab_frames["Timer"], self)
+        self.tab_history = HistoryTab(self.tab_frames["History"], self)
+        self.tab_summary = SummaryTab(self.tab_frames["Summary"], self)
+        self.tab_projects = ProjectsTab(self.tab_frames["Projects"], self)
+        self.tab_settings = AppearanceTab(self.tab_frames["Settings"], self)
 
         self.current_tab = "Timer"
 
@@ -215,7 +215,7 @@ class DerbyApp(QMainWindow):
     def _update_timers(self):
         """Update all active session durations."""
         # Update timer tab
-        self.timer_tab.update_durations()
+        self.tab_timer.update_durations()
 
         # Update status bar
         active = db.get_active_sessions()
@@ -245,15 +245,15 @@ class DerbyApp(QMainWindow):
 
         # Refresh the tab data
         if tab_name == "Timer":
-            self.timer_tab.refresh()
+            self.tab_timer.refresh()
         elif tab_name == "History":
-            self.history_tab.refresh()
+            self.tab_history.refresh()
         elif tab_name == "Summary":
-            self.summary_tab.refresh()
+            self.tab_summary.refresh()
         elif tab_name == "Projects":
-            self.projects_tab.refresh()
+            self.tab_projects.refresh()
         elif tab_name == "Settings":
-            self.settings_tab.refresh()
+            self.tab_settings.refresh()
 
     def _export_csv(self):
         """Export sessions to CSV file."""
@@ -277,7 +277,7 @@ class DerbyApp(QMainWindow):
         dialog = ConfirmDialog(self, "Confirm", f"Stop {len(active)} active session(s)?")
         if dialog.get_result():
             db.stop_all_sessions()
-            self.timer_tab.refresh()
+            self.tab_timer.refresh()
 
     def _show_log_dialog(self):
         """Show dialog to log manual entry."""
@@ -304,18 +304,18 @@ class DerbyApp(QMainWindow):
             'current_tab': self.current_tab,
             'geometry': self.geometry(),
             'timer': {
-                'project_var': self.timer_tab.project_var,
-                'bg_task_var': self.timer_tab.bg_task_var,
+                'project_var': self.tab_timer.project_var,
+                'bg_task_var': self.tab_timer.bg_task_var,
             },
             'history': {
-                'project_filter': self.history_tab.project_filter,
-                'period_filter': self.history_tab.period_filter,
-                'limit_var': self.history_tab.limit_var,
+                'project_filter': self.tab_history.project_filter,
+                'period_filter': self.tab_history.period_filter,
+                'limit_var': self.tab_history.limit_var,
             },
             'summary': {
-                'period_var': self.summary_tab.period_var,
-                'sort_var': self.summary_tab.sort_var,
-                'group_var': self.summary_tab.group_var,
+                'period_var': self.tab_summary.period_var,
+                'sort_var': self.tab_summary.sort_var,
+                'group_var': self.tab_summary.group_var,
             },
         }
         return state
@@ -326,18 +326,18 @@ class DerbyApp(QMainWindow):
         self.setGeometry(state['geometry'])
 
         # Restore timer tab state
-        self.timer_tab.project_var = state['timer']['project_var']
-        self.timer_tab.bg_task_var = state['timer']['bg_task_var']
+        self.tab_timer.project_var = state['timer']['project_var']
+        self.tab_timer.bg_task_var = state['timer']['bg_task_var']
 
         # Restore history tab state
-        self.history_tab.project_filter = state['history']['project_filter']
-        self.history_tab.period_filter = state['history']['period_filter']
-        self.history_tab.limit_var = state['history']['limit_var']
+        self.tab_history.project_filter = state['history']['project_filter']
+        self.tab_history.period_filter = state['history']['period_filter']
+        self.tab_history.limit_var = state['history']['limit_var']
 
         # Restore summary tab state
-        self.summary_tab.period_var = state['summary']['period_var']
-        self.summary_tab.sort_var = state['summary']['sort_var']
-        self.summary_tab.group_var = state['summary']['group_var']
+        self.tab_summary.period_var = state['summary']['period_var']
+        self.tab_summary.sort_var = state['summary']['sort_var']
+        self.tab_summary.group_var = state['summary']['group_var']
 
         # Switch to saved tab
         self.tab_switcher.set_current_tab(state['current_tab'])
