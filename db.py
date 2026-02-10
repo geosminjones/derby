@@ -580,8 +580,12 @@ def list_projects(tag: Optional[str] = None, min_priority: Optional[int] = None,
         tags = [] if row_is_background else project_tags_map.get(row["id"], [])
 
         # Filter by tag if specified (only applies to regular projects)
-        if tag and not row_is_background and tag.lower() not in [t.lower() for t in tags]:
-            continue
+        if tag and not row_is_background:
+            if tag == "Untagged":
+                if tags: # If it has tags, skip it
+                    continue
+            elif tag.lower() not in [t.lower() for t in tags]:
+                continue
 
         projects.append(Project(
             id=row["id"],
@@ -1549,6 +1553,7 @@ def log_session(
 
 def get_sessions(
     project_name: Optional[str] = None,
+    tag: Optional[str] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     limit: int = 50
@@ -1558,6 +1563,7 @@ def get_sessions(
 
     All filters are optional and can be combined:
     - project_name: Only sessions for this project
+    - tag: Only sessions for projects with this tag
     - start_date: Only sessions that started on or after this time
     - end_date: Only sessions that started before this time
     - limit: Maximum number of results
@@ -1584,6 +1590,23 @@ def get_sessions(
         if project_name:
             query += " AND project_name = ?"
             params.append(project_name)
+
+        if tag:
+            if tag == "Untagged":
+                query += """ AND project_name NOT IN (
+                    SELECT p.name 
+                    FROM projects p 
+                    JOIN project_tags pt ON p.id = pt.project_id
+                )"""
+            else:
+                query += """ AND project_name IN (
+                    SELECT p.name 
+                    FROM projects p 
+                    JOIN project_tags pt ON p.id = pt.project_id 
+                    JOIN tags t ON pt.tag_id = t.id 
+                    WHERE t.name = ? COLLATE NOCASE
+                )"""
+                params.append(tag)
 
         if start_date:
             query += " AND start_time >= ?"
@@ -1614,7 +1637,8 @@ def get_sessions(
 
 def get_summary(
     start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None,
+    tag: Optional[str] = None
 ) -> dict[str, int]:
     """
     Get total seconds tracked per project within a date range.
@@ -1622,6 +1646,7 @@ def get_summary(
     Args:
         start_date: Count sessions starting on or after this time
         end_date: Count sessions starting before this time
+        tag: Filter to projects with this tag
 
     Returns:
         Dictionary mapping project names to total seconds
@@ -1657,6 +1682,23 @@ def get_summary(
             query += " AND start_time < ?"
             params.append(end_date.isoformat())
 
+        if tag:
+            if tag == "Untagged":
+                query += """ AND project_name NOT IN (
+                    SELECT p.name 
+                    FROM projects p 
+                    JOIN project_tags pt ON p.id = pt.project_id
+                )"""
+            else:
+                query += """ AND project_name IN (
+                    SELECT p.name 
+                    FROM projects p 
+                    JOIN project_tags pt ON p.id = pt.project_id 
+                    JOIN tags t ON pt.tag_id = t.id 
+                    WHERE t.name = ? COLLATE NOCASE
+                )"""
+                params.append(tag)
+
         query += " GROUP BY project_name ORDER BY total_seconds DESC"
 
         cursor.execute(query, params)
@@ -1673,7 +1715,8 @@ def get_summary(
 def get_summary_with_priority(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
-    is_background: Optional[bool] = None
+    is_background: Optional[bool] = None,
+    tag: Optional[str] = None
 ) -> dict[str, dict]:
     """
     Get total seconds tracked per project with priority info.
@@ -1682,6 +1725,7 @@ def get_summary_with_priority(
         start_date: Count sessions starting on or after this time
         end_date: Count sessions starting before this time
         is_background: If True, only background tasks; if False, only regular projects; if None, all
+        tag: Filter to projects with this tag
 
     Returns:
         Dictionary mapping project names to {seconds, priority, is_background}
@@ -1719,6 +1763,23 @@ def get_summary_with_priority(
             params.append(1 if is_background else 0)
             params.append(1 if is_background else 0)
 
+        if tag:
+            if tag == "Untagged":
+                query += """ AND s.project_name NOT IN (
+                    SELECT p.name 
+                    FROM projects p 
+                    JOIN project_tags pt ON p.id = pt.project_id
+                )"""
+            else:
+                query += """ AND s.project_name IN (
+                    SELECT p.name 
+                    FROM projects p 
+                    JOIN project_tags pt ON p.id = pt.project_id 
+                    JOIN tags t ON pt.tag_id = t.id 
+                    WHERE t.name = ? COLLATE NOCASE
+                )"""
+                params.append(tag)
+
         query += " GROUP BY s.project_name ORDER BY priority ASC, total_seconds DESC"
 
         cursor.execute(query, params)
@@ -1738,7 +1799,8 @@ def get_summary_with_priority(
 def get_summary_by_day(
     start_date: datetime,
     end_date: datetime,
-    is_background: Optional[bool] = None
+    is_background: Optional[bool] = None,
+    tag: Optional[str] = None
 ) -> dict[str, dict]:
     """
     Get per-project, per-day breakdown of time tracked.
@@ -1747,6 +1809,7 @@ def get_summary_by_day(
         start_date: Count sessions starting on or after this time
         end_date: Count sessions starting before this time
         is_background: If True, only background tasks; if False, only regular projects; if None, all
+        tag: Filter to projects with this tag
 
     Returns:
         Dictionary with structure:
@@ -1779,6 +1842,23 @@ def get_summary_by_day(
             params.append(1 if is_background else 0)
             params.append(1 if is_background else 0)
 
+        if tag:
+            if tag == "Untagged":
+                query += """ AND s.project_name NOT IN (
+                    SELECT p.name 
+                    FROM projects p 
+                    JOIN project_tags pt ON p.id = pt.project_id
+                )"""
+            else:
+                query += """ AND s.project_name IN (
+                    SELECT p.name 
+                    FROM projects p 
+                    JOIN project_tags pt ON p.id = pt.project_id 
+                    JOIN tags t ON pt.tag_id = t.id 
+                    WHERE t.name = ? COLLATE NOCASE
+                )"""
+                params.append(tag)
+
         query += " GROUP BY s.project_name, date(s.start_time)"
 
         cursor.execute(query, params)
@@ -1808,7 +1888,8 @@ def get_summary_by_day(
 
 def get_summary_by_tag(
     start_date: datetime,
-    end_date: datetime
+    end_date: datetime,
+    tag: Optional[str] = None
 ) -> dict[str, dict]:
     """
     Get per-tag, per-project, per-day breakdown of time tracked.
@@ -1819,6 +1900,7 @@ def get_summary_by_tag(
     Args:
         start_date: Count sessions starting on or after this time
         end_date: Count sessions starting before this time
+        tag: Filter to this specific tag
 
     Returns:
         Dictionary with structure:
@@ -1867,7 +1949,7 @@ def get_summary_by_tag(
         project_id_to_name: dict[int, str] = {row["id"]: row["name"] for row in project_rows}
 
         # Get per-day session data for regular projects
-        cursor.execute("""
+        query = """
             SELECT
                 s.project_name,
                 date(s.start_time) as session_date,
@@ -1880,9 +1962,29 @@ def get_summary_by_tag(
               AND s.start_time >= ?
               AND s.start_time < ?
               AND (p.is_background = 0 OR p.is_background IS NULL)
-            GROUP BY s.project_name, date(s.start_time)
-        """, (start_date.isoformat(), end_date.isoformat()))
+        """
+        params = [start_date.isoformat(), end_date.isoformat()]
 
+        if tag:
+            if tag == "Untagged":
+                query += """ AND s.project_name NOT IN (
+                    SELECT p.name 
+                    FROM projects p 
+                    JOIN project_tags pt ON p.id = pt.project_id
+                )"""
+            else:
+                query += """ AND s.project_name IN (
+                    SELECT p.name 
+                    FROM projects p 
+                    JOIN project_tags pt ON p.id = pt.project_id 
+                    JOIN tags t ON pt.tag_id = t.id 
+                    WHERE t.name = ? COLLATE NOCASE
+                )"""
+                params.append(tag)
+
+        query += " GROUP BY s.project_name, date(s.start_time)"
+
+        cursor.execute(query, params)
         session_rows = cursor.fetchall()
 
     # Build project data structure
@@ -1907,6 +2009,8 @@ def get_summary_by_tag(
 
         if not tags:
             # Untagged
+            if tag and tag.lower() != "untagged":
+                continue
             tag_name = "Untagged"
             if tag_name not in result:
                 result[tag_name] = {"projects": {}, "total": 0}
@@ -1919,6 +2023,8 @@ def get_summary_by_tag(
         else:
             # Add to each tag group
             for tag_name in tags:
+                if tag and tag_name.lower() != tag.lower():
+                    continue
                 if tag_name not in result:
                     result[tag_name] = {"projects": {}, "total": 0}
                 result[tag_name]["projects"][project_name] = {

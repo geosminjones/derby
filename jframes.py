@@ -52,7 +52,7 @@ TODO: Optimization opportunities:
 1. Cache QFont objects at module level instead of creating per-widget:
    _FONT_13 = QFont(FONT_FAMILY, 13)
    _FONT_13_BOLD = QFont(FONT_FAMILY, 13, QFont.Weight.Bold)
-2. Cache themes.get_colors() result during batch operations - currently
+2. Cache get_colors() result during batch operations - currently
    creates a new dict via to_dict() on every call, which happens per-row
 3. Consider passing colors dict to row constructors for bulk operations
 """
@@ -60,7 +60,9 @@ TODO: Optimization opportunities:
 import os
 import tempfile
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Callable, Optional, TYPE_CHECKING
+import json
 
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -69,8 +71,218 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
-import themes
-from themes import FONT_FAMILY
+import json
+
+# ... (rest of the imports)
+
+# =============================================================================
+# THEME DEFINITIONS (moved from themes.py)
+# =============================================================================
+
+# Font configuration
+FONT_FAMILY = "Inter"
+
+
+@dataclass
+class Theme:
+    """Represents a complete UI theme."""
+
+    name: str              # Internal identifier (e.g., "dark")
+    display_name: str      # User-facing name (e.g., "Dark Mode")
+
+    # Core background colors
+    bg_dark: str           # Main window background
+    bg_medium: str         # Secondary/treeview background
+    bg_light: str          # Lighter accent/selection background
+
+    # Text colors
+    text_primary: str      # Main text color
+    text_secondary: str    # Muted/hint text color
+
+    # Component colors
+    separator: str         # Treeview separator rows
+    card_bg: str           # Section card background
+    container_bg: str      # Container frame background
+
+    # Semantic colors (buttons, alerts)
+    danger: str            # Delete/destructive actions
+    danger_hover: str      # Hover state for danger buttons
+    success: str           # Success indicators
+
+    # Session card colors
+    session_active_bg: str    # Active session card background (light green)
+    session_paused_bg: str    # Paused session card background (light yellow)
+    session_stopped_bg: str   # Stopped session card background (slightly lighter than bg)
+
+    # Row selection color
+    row_selected: str         # Selected row background (blue tint)
+
+    # Scrollbar colors
+    scrollbar_track: str          # Track background for opaque contexts
+    scrollbar_thumb: str          # Default thumb color
+    scrollbar_thumb_hover: str    # Hover state for thumb
+
+    # Appearance mode (for compatibility)
+    ctk_appearance_mode: str  # "Dark" or "Light"
+
+    def to_dict(self) -> dict[str, str]:
+        """Return color values as dictionary for backward compatibility."""
+        return {
+            "bg_dark": self.bg_dark,
+            "bg_medium": self.bg_medium,
+            "bg_light": self.bg_light,
+            "text_primary": self.text_primary,
+            "text_secondary": self.text_secondary,
+            "separator": self.separator,
+            "card_bg": self.card_bg,
+            "container_bg": self.container_bg,
+            "danger": self.danger,
+            "danger_hover": self.danger_hover,
+            "success": self.success,
+            "session_active_bg": self.session_active_bg,
+            "session_paused_bg": self.session_paused_bg,
+            "session_stopped_bg": self.session_stopped_bg,
+            "row_selected": self.row_selected,
+            "scrollbar_track": self.scrollbar_track,
+            "scrollbar_thumb": self.scrollbar_thumb,
+            "scrollbar_thumb_hover": self.scrollbar_thumb_hover,
+        }
+
+def load_themes_from_json(file_path: str) -> dict[str, Theme]:
+    """Loads themes from a JSON file."""
+    themes = {}
+    with open(file_path, 'r') as f:
+        data = json.load(f)
+        for name, colors in data["themes"].items():
+            themes[name] = Theme(name=name, **colors)
+    return themes
+
+# Theme registry
+THEMES = load_themes_from_json('themes.json')
+DARK_THEME = THEMES.get("dark")
+
+
+# =============================================================================
+# MODULE STATE
+# =============================================================================
+
+_current_theme: Theme = DARK_THEME
+_theme_change_callbacks: list[Callable[[], None]] = []
+
+
+# =============================================================================
+# PUBLIC API
+# =============================================================================
+
+def get_current_theme() -> Theme:
+    """Get the currently active theme."""
+    return _current_theme
+
+
+def get_colors() -> dict[str, str]:
+    """
+    Get current theme colors as dictionary.
+
+    This provides backward compatibility with the existing COLORS usage.
+    """
+    return _current_theme.to_dict()
+
+
+def get_available_themes() -> list[tuple[str, str]]:
+    """
+    Get list of available themes.
+
+    Returns:
+        List of (name, display_name) tuples
+    """
+    return [(t.name, t.display_name) for t in THEMES.values()]
+
+
+def set_theme(theme_name: str) -> Theme:
+    """
+    Set the active theme by name.
+
+    Args:
+        theme_name: Internal name of theme (e.g., "dark")
+
+    Returns:
+        The newly active Theme
+
+    Raises:
+        ValueError: If theme_name is not found
+    """
+    global _current_theme
+
+    if theme_name not in THEMES:
+        raise ValueError(f"Unknown theme: {theme_name}")
+
+    _current_theme = THEMES[theme_name]
+
+    # Notify all registered callbacks
+    _notify_theme_change()
+
+    return _current_theme
+
+
+def register_theme_callback(callback: Callable[[], None]):
+    """
+    Register a callback to be called when theme changes.
+
+    Args:
+        callback: A callable that takes no arguments
+    """
+    if callback not in _theme_change_callbacks:
+        _theme_change_callbacks.append(callback)
+
+
+def unregister_theme_callback(callback: Callable[[], None]):
+    """
+    Unregister a theme change callback.
+
+    Args:
+        callback: The callback to remove
+    """
+    if callback in _theme_change_callbacks:
+        _theme_change_callbacks.remove(callback)
+
+
+def load_saved_theme() -> Theme:
+    """
+    Load theme from database settings.
+
+    Call this after db.init_database() to restore user's theme preference.
+
+    Returns:
+        The loaded (or default) Theme
+    """
+    import db
+    saved_theme = db.get_setting("theme", "dark")
+
+    try:
+        return set_theme(saved_theme)
+    except ValueError:
+        # Fall back to dark theme if saved theme is invalid
+        return set_theme("dark")
+
+
+def save_theme_preference():
+    """Save current theme to database."""
+    import db
+    db.set_setting("theme", _current_theme.name)
+
+
+# =============================================================================
+# PRIVATE FUNCTIONS
+# =============================================================================
+
+def _notify_theme_change():
+    """Call all registered theme change callbacks."""
+    for callback in _theme_change_callbacks:
+        try:
+            callback()
+        except Exception as e:
+            # Log but don't crash if a callback fails
+            print(f"Theme callback error: {e}")
 
 if TYPE_CHECKING:
     from PyQt6.QtWidgets import QWidget as QWidgetType
@@ -216,10 +428,14 @@ class TableRow(QFrame):
         on_action: Optional[Callable[[str, str], None]] = None,
         actions: Optional[list[dict]] = None,
         row_padding: int = 0,
-        is_header: bool = False
+        is_header: bool = False,
+        column_border_mode: str = "none",
+        text_time_boundary: int = 0,
+        border_after_first: bool = False,
+        border_before_last: bool = False
     ):
         super().__init__(parent)
-        colors = themes.get_colors()
+        colors = get_colors()
 
         # Header rows get different styling
         if is_header:
@@ -241,6 +457,10 @@ class TableRow(QFrame):
         self.on_action = on_action
         self.actions = actions or []
         self.is_header = is_header
+        self.column_border_mode = column_border_mode
+        self.text_time_boundary = text_time_boundary
+        self.border_after_first = border_after_first
+        self.border_before_last = border_before_last
         self.cell_labels: list[QLabel] = []
         self.action_buttons: list[QPushButton] = []
 
@@ -248,14 +468,36 @@ class TableRow(QFrame):
 
     def _build_row(self, padding: int):
         """Build the row with cells and optional action buttons."""
-        colors = themes.get_colors()
+        colors = get_colors()
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(8)
 
+        num_columns = len(self.values)
+
         # Create cells for each value
         for i, (value, width, anchor) in enumerate(zip(self.values, self.column_widths, self.column_anchors)):
+            # Determine if we should add a border before this cell
+            should_add_border = False
+            if i > 0:  # Never before first cell
+                if self.column_border_mode == "all":
+                    should_add_border = True
+                elif self.column_border_mode == "text_time":
+                    # Border after first column (before index 1)
+                    if self.border_after_first and i == 1:
+                        should_add_border = True
+                    # Border at text_time_boundary (after that column index)
+                    elif i == self.text_time_boundary + 1:
+                        should_add_border = True
+                    # Border before last column
+                    elif self.border_before_last and i == num_columns - 1:
+                        should_add_border = True
+
+            if should_add_border:
+                border = ColumnBorder(self)
+                layout.addWidget(border)
+
             # Map anchor to Qt alignment
             alignment = self._map_anchor(anchor)
 
@@ -331,7 +573,7 @@ class TableRow(QFrame):
 
     def update_actions(self, new_actions: list[dict]):
         """Update the action buttons for this row."""
-        colors = themes.get_colors()
+        colors = get_colors()
 
         # Update existing buttons or create new ones
         for i, action in enumerate(new_actions):
@@ -369,7 +611,7 @@ class TableRow(QFrame):
         if self.is_header:
             return
         self._is_selected = is_selected
-        colors = themes.get_colors()
+        colors = get_colors()
         new_bg = colors["row_selected"] if is_selected else self._bg_color
         self.setStyleSheet(f"background-color: {new_bg}; border: none;")
 
@@ -404,7 +646,11 @@ class ResizableHeaderRow(TableRow):
         column_widths: list[int],
         column_anchors: list[str],
         row_padding: int = 0,
-        is_header: bool = True
+        is_header: bool = True,
+        column_border_mode: str = "none",
+        text_time_boundary: int = 0,
+        border_after_first: bool = False,
+        border_before_last: bool = False
     ):
         self._table = table
         self._resize_column_index = -1  # Column being resized (-1 if none)
@@ -419,7 +665,11 @@ class ResizableHeaderRow(TableRow):
             column_widths=column_widths,
             column_anchors=column_anchors,
             row_padding=row_padding,
-            is_header=is_header
+            is_header=is_header,
+            column_border_mode=column_border_mode,
+            text_time_boundary=text_time_boundary,
+            border_after_first=border_after_first,
+            border_before_last=border_before_last
         )
 
         # Enable mouse tracking to detect hover over resize zones
@@ -518,9 +768,20 @@ class TableDivider(QFrame):
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
-        colors = themes.get_colors()
+        colors = get_colors()
         self.setFixedHeight(1)
         self.setStyleSheet(f"background-color: {colors['separator']};")
+
+
+class ColumnBorder(QFrame):
+    """A vertical divider line between table columns."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        colors = get_colors()
+        self.setFixedWidth(1)
+        # Use text_secondary for high contrast against all backgrounds
+        self.setStyleSheet(f"background-color: {colors['text_secondary']};")
 
 
 class Table(QFrame):
@@ -574,10 +835,14 @@ class Table(QFrame):
         row_padding: int = 0,
         row_spacing: int = 1,
         show_dividers: bool = True,
-        on_action: Optional[Callable[[str, str], None]] = None
+        on_action: Optional[Callable[[str, str], None]] = None,
+        column_border_mode: str = "none",
+        text_time_boundary: int = 0,
+        border_after_first: bool = False,
+        border_before_last: bool = False
     ):
         super().__init__(parent)
-        colors = themes.get_colors()
+        colors = get_colors()
 
         self.setStyleSheet(f"""
             QFrame {{
@@ -594,6 +859,10 @@ class Table(QFrame):
         self.row_spacing = row_spacing
         self.show_dividers = show_dividers
         self.on_action = on_action
+        self.column_border_mode = column_border_mode
+        self.text_time_boundary = text_time_boundary
+        self.border_after_first = border_after_first
+        self.border_before_last = border_before_last
 
         self.rows: dict[str, TableRow] = {}
         self.row_order: list[str] = []
@@ -603,7 +872,7 @@ class Table(QFrame):
 
     def _build_table(self):
         """Build the table structure."""
-        colors = themes.get_colors()
+        colors = get_colors()
 
         # Main layout
         main_layout = QVBoxLayout(self)
@@ -615,7 +884,7 @@ class Table(QFrame):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scrollbar_qss = themes.get_scrollbar_qss(
+        scrollbar_qss = get_scrollbar_qss(
             vertical=True,
             horizontal=True,
             transparent_track=False,
@@ -655,7 +924,11 @@ class Table(QFrame):
             column_widths=self.widths,
             column_anchors=self.anchors,
             row_padding=0,
-            is_header=True
+            is_header=True,
+            column_border_mode=self.column_border_mode,
+            text_time_boundary=self.text_time_boundary,
+            border_after_first=self.border_after_first,
+            border_before_last=self.border_before_last
         )
         self.content_layout.addWidget(header_row)
         self._header_row = header_row
@@ -760,7 +1033,11 @@ class Table(QFrame):
             on_action=self.on_action,
             actions=actions,
             row_padding=self.row_padding,
-            is_header=is_total  # Reuse header styling for total rows
+            is_header=is_total,  # Reuse header styling for total rows
+            column_border_mode=self.column_border_mode,
+            text_time_boundary=self.text_time_boundary,
+            border_after_first=self.border_after_first,
+            border_before_last=self.border_before_last
         )
         self.content_layout.addWidget(row)
 
@@ -848,7 +1125,7 @@ class SessionCard(QFrame):
         on_toggle_pause: Optional[Callable[[str], None]] = None
     ):
         super().__init__(parent)
-        colors = themes.get_colors()
+        colors = get_colors()
 
         self.session_id = session_id
         self.project_name = project_name
@@ -867,7 +1144,7 @@ class SessionCard(QFrame):
 
     def _update_card_style(self):
         """Update card background based on pause state."""
-        colors = themes.get_colors()
+        colors = get_colors()
         card_bg = colors["session_paused_bg"] if self.is_paused else colors["session_active_bg"]
         self.setStyleSheet(f"""
             QFrame {{
@@ -878,7 +1155,7 @@ class SessionCard(QFrame):
 
     def _build_card(self, started: str, duration: str):
         """Build the session card UI."""
-        colors = themes.get_colors()
+        colors = get_colors()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 12, 15, 12)
@@ -989,7 +1266,7 @@ class SessionCard(QFrame):
 
     def update_pause_state(self, is_paused: bool):
         """Update the pause state and toggle Pause/Play button visibility."""
-        colors = themes.get_colors()
+        colors = get_colors()
         self.is_paused = is_paused
 
         # Update card background
@@ -1031,7 +1308,7 @@ class StoppedSessionCard(QFrame):
         on_play: Optional[Callable[[str], None]] = None
     ):
         super().__init__(parent)
-        colors = themes.get_colors()
+        colors = get_colors()
 
         self.project_name = project_name
         self.on_play = on_play
@@ -1048,7 +1325,7 @@ class StoppedSessionCard(QFrame):
 
     def _build_card(self, stop_date: str, duration: str):
         """Build the stopped session card UI."""
-        colors = themes.get_colors()
+        colors = get_colors()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 12, 15, 12)
@@ -1128,24 +1405,29 @@ class SessionList(QFrame):
         parent: QWidget,
         on_stop: Optional[Callable[[str], None]] = None,
         on_toggle_pause: Optional[Callable[[str], None]] = None,
-        empty_message: str = "No active sessions"
+        on_play_stopped: Optional[Callable[[str], None]] = None,
+        empty_message: str = "No active sessions",
+        max_stopped_cards: int = 3
     ):
         super().__init__(parent)
-        colors = themes.get_colors()
+        colors = get_colors()
 
         self.setStyleSheet("background: transparent;")
 
         self.on_stop = on_stop
         self.on_toggle_pause = on_toggle_pause
+        self.on_play_stopped = on_play_stopped
         self.empty_message = empty_message
+        self.max_stopped_cards = max_stopped_cards
 
         self.cards: dict[str, SessionCard] = {}
+        self.stopped_list: Optional[StoppedSessionList] = None
 
         self._build_list()
 
     def _build_list(self):
         """Build the session list container."""
-        colors = themes.get_colors()
+        colors = get_colors()
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -1156,7 +1438,7 @@ class SessionList(QFrame):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scrollbar_qss = themes.get_scrollbar_qss(
+        scrollbar_qss = get_scrollbar_qss(
             vertical=True,
             horizontal=False,
             transparent_track=True,
@@ -1181,12 +1463,30 @@ class SessionList(QFrame):
         self.scroll_area.setWidget(self.content_widget)
         main_layout.addWidget(self.scroll_area)
 
-        # Empty state label (shown when no sessions)
+        # Empty state label (shown when no active sessions)
         self.empty_label = QLabel(self.empty_message)
         self.empty_label.setFont(QFont(FONT_FAMILY, 12))
         self.empty_label.setStyleSheet(f"color: {colors['text_secondary']}; background: transparent;")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.content_layout.addWidget(self.empty_label)
+
+        # Active sessions container
+        self.active_widget = QWidget()
+        self.active_layout = QVBoxLayout(self.active_widget)
+        self.active_layout.setContentsMargins(0, 0, 0, 0)
+        self.active_layout.setSpacing(10)
+        self.content_layout.addWidget(self.active_widget)
+
+        # Stopped sessions list (if enabled)
+        if self.on_play_stopped:
+            self.stopped_list = StoppedSessionList(
+                self.content_widget,
+                max_cards=self.max_stopped_cards,
+                on_play=self.on_play_stopped
+            )
+            # Remove top margin as it's now inside another layout with spacing
+            self.stopped_list.layout.setContentsMargins(0, 0, 0, 0)
+            self.content_layout.addWidget(self.stopped_list)
 
     def add_session(
         self,
@@ -1196,13 +1496,13 @@ class SessionList(QFrame):
         duration: str,
         is_paused: bool = False
     ) -> SessionCard:
-        """Add a session card to the list."""
+        """Add a session card to the active list."""
         # Hide empty message when adding first session
         if not self.cards:
             self.empty_label.hide()
 
         card = SessionCard(
-            self.content_widget,
+            self.active_widget,
             session_id=session_id,
             project_name=project_name,
             started=started,
@@ -1211,14 +1511,14 @@ class SessionList(QFrame):
             on_stop=self.on_stop,
             on_toggle_pause=self.on_toggle_pause
         )
-        self.content_layout.addWidget(card)
+        self.active_layout.addWidget(card)
 
         self.cards[session_id] = card
         return card
 
     def clear(self):
-        """Remove all session cards."""
-        with batch_update(self.content_widget):
+        """Remove all active session cards."""
+        with batch_update(self.active_widget):
             for card in self.cards.values():
                 card.deleteLater()
             self.cards.clear()
@@ -1355,7 +1655,7 @@ class TabButton(QPushButton):
 
     def _update_style(self, selected: bool):
         """Update button style based on selection state."""
-        colors = themes.get_colors()
+        colors = get_colors()
         if selected:
             self.setStyleSheet(f"""
                 QPushButton {{
@@ -1404,7 +1704,7 @@ class TabSwitcher(QFrame):
 
     def __init__(self, tabs: list[str], parent=None):
         super().__init__(parent)
-        colors = themes.get_colors()
+        colors = get_colors()
 
         self.setStyleSheet(f"""
             QFrame {{
@@ -1473,7 +1773,7 @@ class MessageBox(QDialog):
 
     def __init__(self, parent: QWidget, title: str, message: str, msg_type: str = "info"):
         super().__init__(parent)
-        colors = themes.get_colors()
+        colors = get_colors()
 
         self.setWindowTitle(title)
         self.setFixedSize(350, 150)
@@ -1493,7 +1793,7 @@ class MessageBox(QDialog):
 
     def _build_ui(self, message: str):
         """Build the dialog UI."""
-        colors = themes.get_colors()
+        colors = get_colors()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -1538,7 +1838,7 @@ class ConfirmDialog(QDialog):
 
     def __init__(self, parent: QWidget, title: str, message: str):
         super().__init__(parent)
-        colors = themes.get_colors()
+        colors = get_colors()
 
         self.result = False
 
@@ -1560,7 +1860,7 @@ class ConfirmDialog(QDialog):
 
     def _build_ui(self, message: str):
         """Build the dialog UI."""
-        colors = themes.get_colors()
+        colors = get_colors()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -1628,9 +1928,85 @@ class ConfirmDialog(QDialog):
         return self.result
 
 
+def get_scrollbar_qss(
+    vertical: bool = True,
+    horizontal: bool = False,
+    transparent_track: bool = False,
+    width: int = 12
+) -> str:
+    """
+    Generate consistent QSS for scrollbar styling.
+
+    Args:
+        vertical: Include vertical scrollbar styling
+        horizontal: Include horizontal scrollbar styling
+        transparent_track: Use transparent track (True) or opaque theme color (False)
+        width: Scrollbar width in pixels
+
+    Returns:
+        QSS string for scrollbar styling
+    """
+    colors = get_colors()
+    track_color = "transparent" if transparent_track else colors["scrollbar_track"]
+    thumb_color = colors["scrollbar_thumb"]
+    thumb_hover = colors["scrollbar_thumb_hover"]
+    border_radius = max(3, width // 3)
+
+    qss_parts = []
+
+    if vertical:
+        qss_parts.append(f"""
+            QScrollBar:vertical {{
+                background-color: {track_color};
+                width: {width}px;
+                border-radius: {border_radius}px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {thumb_color};
+                border-radius: {border_radius}px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background-color: {thumb_hover};
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+        """)
+
+    if horizontal:
+        qss_parts.append(f"""
+            QScrollBar:horizontal {{
+                background-color: {track_color};
+                height: {width}px;
+                border-radius: {border_radius}px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background-color: {thumb_color};
+                border-radius: {border_radius}px;
+                min-width: 20px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background-color: {thumb_hover};
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+                background: none;
+            }}
+        """)
+
+    return "".join(qss_parts)
+
+
 # Aliases for backwards compatibility
 CTkTableRow = TableRow
 CTkTableDivider = TableDivider
+CTkColumnBorder = ColumnBorder
 CTkTable = Table
 CTkSessionCard = SessionCard
 CTkSessionList = SessionList
