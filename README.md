@@ -1,6 +1,6 @@
-# Derby v0.5.0 db1
+# Derby v0.5.0 _db2_
 
-Derby is a 100% local time-tracking app written in Python with a GUI built in CustomTkinter. It is designed to be feature-competitive with all other time-tracking applications that I have ever used, especially with their paid versions, which I have always felt were subjected to insane markups because of the demand from lawyers. Fortunately, this application should be well-suited for even use by said lawyers, if they can get past the fact that it is built with the last decade's GUI technology, and only built in that way because it's some of the only computer language that I can speak -- and barely, at that. Derby's notable features include:
+Derby is a 100% local time-tracking app written in Python with a GUI built in PyQt. It is designed to be feature-competitive with all other time-tracking applications that I have ever used, especially with their paid versions, which I have always felt were subjected to insane markups because of the demand from lawyers. Fortunately, this application should be well-suited for even use by said lawyers, if they can get past the fact that it is built with the last decade's GUI technology, and only built in that way because it's some of the only computer language that I can speak -- and barely, at that. Derby's notable features include:
 
 - The ability to store hundreds of different projects, and data for them
 - Capable of running several projects concurrently, as well as pausing them
@@ -15,11 +15,29 @@ You may notice that this is me finally getting around to writing a README by han
 
 ## Installation
 
-The packaged Derby executables are compiled by me in a virtual environment, and I use them extensively on my own Windows machine, so they should generally work. If they do not, let me know, and I'll be on top of it, but otherwise, you can also compile your own executable with the following command, after navigating to the directory post-download and installing requirements:
+You have two options for installation: **manual** and **less manual.**
+
+### Manual Installation
+
+Download the source code and unzip it. You will need the latest version of Python 3 available, and pip. Navigate to the unzipped folder in the terminal after you've moved it to wherever you want Derby to live on your computer. Install requirements with this command:
+
+pip install -r requirements.txt
+
+You can do it in a virtual environment if you like, but it pretty much just installs PyQt6. After you're done, run the following command. 
 
 pyinstaller --onefile gui.py --name derby --icon=jockey.ico --noconsole
 
-This should produce a named executable (albeit without a version number) that doesn't spawn a console and works just fine. It's the command I use on my own machine.
+This outputs a derby executable in the /dist folder. Next, it is very important that you **copy themes.json and jockey.ico to this directory.** The themes json is required for the app to even load (for some reason -- I should fix that) and the jockey icon ensures the app icon shows properly in the top left when running it. 
+
+You can create a shortcut to the produced executable for use wherever.
+
+### Less Manual Installation
+
+Download the non-source-code files from the latest release on Github. Then, make a directory anywhere you want for running the application, and make sure it has the Derby executable, the themes.json, _and_ the jockey.ico. Lastly, create a shortcut for using this executable in this folder from your desktop, and move said shortcut to your desktop. 
+
+### For Both Installation Methods
+
+It is recommended that you change the default data output directory, as it defaults to AppData, cluttering up your boot drive. It doesn't make a lot of data, but I imagine if used for a year straight personally, or even three months professionally, it probably would. Remember to back the database up in both .db and .csv form regularly to a separate location as well.
 
 ## General Usage
 
